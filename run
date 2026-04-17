@@ -1,0 +1,68 @@
+#!/usr/bin/php
+<?php
+
+require_once __DIR__ . DIRECTORY_SEPARATOR . 'src' . DIRECTORY_SEPARATOR . 'bootstrap.php';
+
+use MailSupportAssistant\Runner\MailAssistantRunner;
+use MailSupportAssistant\Support\Logger;
+use MailSupportAssistant\Tools\ToolsApiClient;
+
+$options = [
+    'dry_run' => false,
+    'limit' => null,
+    'mailbox' => null,
+    'self_test' => false,
+    'help' => false,
+];
+
+foreach (array_slice($argv, 1) as $argument) {
+    $argument = trim((string) $argument);
+    if ($argument === '--help' || $argument === '-h') {
+        $options['help'] = true;
+        continue;
+    }
+    if ($argument === '--self-test') {
+        $options['self_test'] = true;
+        continue;
+    }
+    if ($argument === '--dry-run' || $argument === 'dry-run' || $argument === 'dry') {
+        $options['dry_run'] = true;
+        continue;
+    }
+    if (strpos($argument, '--limit=') === 0) {
+        $options['limit'] = (int) substr($argument, 8);
+        continue;
+    }
+    if (strpos($argument, '--mailbox=') === 0) {
+        $options['mailbox'] = (int) substr($argument, 10);
+        continue;
+    }
+}
+
+if ($options['help']) {
+    echo "Tornevall Tools Mail Assistant\n";
+    echo "Usage:\n";
+    echo "  php run --help\n";
+    echo "  php run --self-test\n";
+    echo "  php run --dry-run [--limit=5] [--mailbox=12]\n";
+    echo "\nEnv keys:\n";
+    echo "  MAIL_ASSISTANT_TOOLS_BASE_URL\n";
+    echo "  MAIL_ASSISTANT_TOOLS_TOKEN\n";
+    echo "  MAIL_ASSISTANT_WEB_USER\n";
+    echo "  MAIL_ASSISTANT_WEB_PASSWORD\n";
+    exit(0);
+}
+
+$logger = new Logger();
+$runner = new MailAssistantRunner(new ToolsApiClient(), $logger);
+
+if ($options['self_test']) {
+    $result = $runner->selfTest();
+    echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    exit(0);
+}
+
+$result = $runner->run($options);
+echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+exit($result['ok'] ? 0 : 1);
+

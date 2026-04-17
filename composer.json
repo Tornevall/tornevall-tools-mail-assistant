@@ -1,0 +1,21 @@
+{
+  "name": "tornevall/mail-support-assistant",
+  "description": "Standalone IMAP support-mail assistant that fetches admin-managed config from Tools.",
+  "type": "project",
+  "require": {
+    "php": "^7.4 || ^8.0",
+    "ext-curl": "*",
+    "ext-json": "*",
+    "ext-session": "*"
+  },
+  "suggest": {
+    "ext-imap": "Required for real IMAP polling and message moves/deletes.",
+    "ext-mbstring": "Recommended for more robust MIME decoding."
+  },
+  "autoload": {
+    "psr-4": {
+      "MailSupportAssistant\\": "src/"
+    }
+  }
+}
+

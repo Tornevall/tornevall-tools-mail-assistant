@@ -1,0 +1,8 @@
+.env
+/storage/*.json
+/storage/logs/*.log
+/storage/cache/*
+!/storage/logs/.gitignore
+!/storage/cache/.gitignore
+/vendor/
+

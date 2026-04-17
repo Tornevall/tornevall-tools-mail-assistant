@@ -147,9 +147,27 @@ class MailAssistantRunner
 
                     $rule = $this->matchRule($message, (array) ($mailbox['rules'] ?? []));
                     if (!$rule) {
+                        $genericNoMatch = $this->tryHandleGenericNoMatch($imap, $config, $mailbox, $message, $dryRun);
+                        if (!empty($genericNoMatch['handled'])) {
+                            $this->recordMessageState($mailboxSummary, $message, 'handled', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule_generic_ai_replied'), $dryRun);
+                            $mailboxSummary['handled']++;
+                            $summary['messages_handled']++;
+                            continue;
+                        }
+
                         $mailboxSummary['skipped']++;
                         $summary['messages_skipped']++;
-                        $this->recordMessageState($mailboxSummary, $message, 'ignored', 'no_matching_rule', $dryRun);
+                        $this->recordMessageState($mailboxSummary, $message, 'ignored', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule'), $dryRun);
+                        $this->logger->info('Message skipped because no configured rule matched.', [
+                            'mailbox' => $mailbox['name'] ?? null,
+                            'uid' => $message['uid'] ?? null,
+                            'message_id' => $message['message_id'] ?? null,
+                            'subject' => $message['subject'] ?? null,
+                            'subject_normalized' => $message['subject_normalized'] ?? null,
+                            'from' => $message['from'] ?? null,
+                            'to' => $message['to'] ?? null,
+                            'generic_no_match_reason' => $genericNoMatch['reason'] ?? null,
+                        ]);
                         if (!empty($mailbox['defaults']['mark_seen_on_skip']) && !$dryRun) {
                             $imap->markSeen((int) $message['uid']);
                         }
@@ -191,17 +209,22 @@ class MailAssistantRunner
 
     private function matchRule(array $message, array $rules): ?array
     {
+        $from = (string) ($message['from'] ?? '');
+        $to = (string) ($message['to'] ?? '');
+        $subject = (string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? ''));
+        $body = (string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? ''));
+
         foreach ($rules as $rule) {
-            if (!$this->containsMatch((string) ($message['from'] ?? ''), (string) (($rule['match']['from_contains'] ?? null) ?: ''))) {
+            if (!$this->containsMatch($from, (string) (($rule['match']['from_contains'] ?? null) ?: ''))) {
                 continue;
             }
-            if (!$this->containsMatch((string) ($message['to'] ?? ''), (string) (($rule['match']['to_contains'] ?? null) ?: ''))) {
+            if (!$this->containsMatch($to, (string) (($rule['match']['to_contains'] ?? null) ?: ''))) {
                 continue;
             }
-            if (!$this->containsMatch((string) ($message['subject'] ?? ''), (string) (($rule['match']['subject_contains'] ?? null) ?: ''))) {
+            if (!$this->containsMatch($subject, (string) (($rule['match']['subject_contains'] ?? null) ?: ''))) {
                 continue;
             }
-            if (!$this->containsMatch((string) ($message['body_text'] ?? ''), (string) (($rule['match']['body_contains'] ?? null) ?: ''))) {
+            if (!$this->containsMatch($body, (string) (($rule['match']['body_contains'] ?? null) ?: ''))) {
                 continue;
             }
 
@@ -219,6 +242,181 @@ class MailAssistantRunner
         }
 
         return stripos($haystack, $needle) !== false;
+    }
+
+    private function tryHandleGenericNoMatch(ImapMailboxClient $imap, array $config, array $mailbox, array $message, bool $dryRun): array
+    {
+        if (!$this->isGenericNoMatchAiEnabled($config, $mailbox)) {
+            return [
+                'handled' => false,
+                'reason' => 'no_matching_rule_generic_ai_disabled',
+            ];
+        }
+
+        try {
+            $defaults = (array) ($mailbox['defaults'] ?? []);
+            $aiResult = $this->tools->generateGenericAiReply($mailbox, $message, [
+                'custom_instruction' => (string) (($defaults['generic_no_match_instruction'] ?? null) ?: ''),
+                'ai_model' => (string) (($defaults['generic_no_match_ai_model'] ?? null) ?: ''),
+                'ai_fallback_model' => (string) (($defaults['generic_no_match_ai_fallback_model'] ?? null) ?: ''),
+                'ai_reasoning_effort' => (string) (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: ''),
+            ]);
+            $replyText = trim((string) ($aiResult['response'] ?? ''));
+            if (!$this->isGenericAiReplyUsable($replyText)) {
+                $this->logger->info('Generic no-match AI fallback skipped: response not usable.', [
+                    'mailbox' => $mailbox['name'] ?? null,
+                    'uid' => $message['uid'] ?? null,
+                    'message_id' => $message['message_id'] ?? null,
+                ]);
+
+                return [
+                    'handled' => false,
+                    'reason' => 'no_matching_rule_generic_ai_unanswerable',
+                ];
+            }
+
+            $replyText = $this->applyGenericFallbackFooter($mailbox, $replyText);
+            $subjectPrefix = trim((string) (($defaults['generic_no_match_subject_prefix'] ?? null) ?: 'Re:'));
+            $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
+            $syntheticRule = [
+                'reply' => [
+                    'from_name' => (string) (($defaults['from_name'] ?? null) ?: ''),
+                    'from_email' => (string) (($defaults['from_email'] ?? null) ?: ''),
+                    'bcc' => (string) (($defaults['bcc'] ?? null) ?: ''),
+                ],
+            ];
+
+            $this->sendReply($mailbox, $syntheticRule, $message, $subject, $replyText, $dryRun);
+            $uid = (int) ($message['uid'] ?? 0);
+            if ($uid > 0 && !$dryRun) {
+                $imap->markSeen($uid);
+            }
+
+            $this->logger->info('Generic no-match AI fallback reply sent.', [
+                'mailbox' => $mailbox['name'] ?? null,
+                'uid' => $message['uid'] ?? null,
+                'message_id' => $message['message_id'] ?? null,
+                'dry_run' => $dryRun,
+                'used_fallback_model' => !empty($aiResult['used_fallback_model']),
+                'model' => $aiResult['model'] ?? null,
+            ]);
+
+            return [
+                'handled' => true,
+                'reason' => 'no_matching_rule_generic_ai_replied',
+            ];
+        } catch (Throwable $e) {
+            $this->logger->warning('Generic no-match AI fallback failed.', [
+                'mailbox' => $mailbox['name'] ?? null,
+                'uid' => $message['uid'] ?? null,
+                'message_id' => $message['message_id'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'handled' => false,
+                'reason' => 'no_matching_rule_generic_ai_error',
+            ];
+        }
+    }
+
+    private function isGenericNoMatchAiEnabled(array $config, array $mailbox): bool
+    {
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+        $candidates = [
+            $defaults['generic_no_match_ai_enabled'] ?? null,
+            $defaults['generic_reply_on_no_match'] ?? null,
+            $defaults['generic_ai_reply_on_no_match'] ?? null,
+            $mailbox['generic_no_match_ai_enabled'] ?? null,
+            $config['generic_no_match_ai_enabled'] ?? null,
+            $config['settings']['generic_no_match_ai_enabled'] ?? null,
+            $config['settings']['generic_reply_on_no_match'] ?? null,
+            $config['features']['generic_no_match_ai_enabled'] ?? null,
+            Env::get('MAIL_ASSISTANT_GENERIC_NO_MATCH_AI', '0'),
+        ];
+
+        foreach ($candidates as $value) {
+            $parsed = $this->toNullableBool($value);
+            if ($parsed !== null) {
+                return $parsed;
+            }
+        }
+
+        return false;
+    }
+
+    private function toNullableBool($value): ?bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+        if (is_int($value) || is_float($value)) {
+            return ((int) $value) !== 0;
+        }
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $normalized = strtolower(trim($value));
+        if ($normalized === '') {
+            return null;
+        }
+        if (in_array($normalized, ['1', 'true', 'yes', 'on', 'enabled'], true)) {
+            return true;
+        }
+        if (in_array($normalized, ['0', 'false', 'no', 'off', 'disabled'], true)) {
+            return false;
+        }
+
+        return null;
+    }
+
+    private function isGenericAiReplyUsable(string $text): bool
+    {
+        $normalized = trim($text);
+        if ($normalized === '') {
+            return false;
+        }
+
+        if (function_exists('mb_strlen')) {
+            if (mb_strlen($normalized, 'UTF-8') < 24) {
+                return false;
+            }
+        } elseif (strlen($normalized) < 24) {
+            return false;
+        }
+
+        $lower = strtolower($normalized);
+        $unanswerablePatterns = [
+            '/^sorry[,\s]/',
+            '/cannot assist/',
+            '/can\'t assist/',
+            '/do not have enough (information|context)/',
+            '/i need more (information|details)/',
+        ];
+        foreach ($unanswerablePatterns as $pattern) {
+            if (preg_match($pattern, $lower) === 1) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function applyGenericFallbackFooter(array $mailbox, string $text): string
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return $text;
+        }
+
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+        $footer = trim((string) (($defaults['generic_no_match_footer'] ?? null) ?: (($defaults['footer'] ?? null) ?: '')));
+        if ($footer === '') {
+            return $text;
+        }
+
+        return rtrim($text) . "\n\n" . $footer;
     }
 
     private function handleMessage(ImapMailboxClient $imap, array $mailbox, array $rule, array $message, bool $dryRun): void
@@ -448,6 +646,20 @@ class MailAssistantRunner
             'Content-Type: text/plain; charset=UTF-8',
             'From: ' . $fromName . ' <' . $fromEmail . '>',
         ];
+
+        $inReplyTo = trim((string) ($message['message_id'] ?? ''));
+        if ($inReplyTo !== '') {
+            $headers[] = 'In-Reply-To: <' . trim($inReplyTo, "<> \t\n\r\0\x0B") . '>';
+        }
+        $references = array_values((array) ($message['references'] ?? []));
+        if ($inReplyTo !== '' && !in_array($inReplyTo, $references, true)) {
+            $references[] = $inReplyTo;
+        }
+        if (count($references)) {
+            $headers[] = 'References: ' . implode(' ', array_map(static function (string $reference): string {
+                return '<' . trim($reference, "<> \t\n\r\0\x0B") . '>';
+            }, $references));
+        }
 
         $bcc = trim((string) (($replyConfig['bcc'] ?? null) ?: (($mailbox['defaults']['bcc'] ?? null) ?: '')));
         if ($bcc !== '') {

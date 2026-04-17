@@ -37,7 +37,12 @@ It is expected to:
 - The web dashboard may trigger safe diagnostics/dry-runs through AJAX, but it should still reuse the same runner classes instead of inventing a second execution stack.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is limited to `.env`, sessions, logs, last-run summaries, and optional message copies in `storage/`.
 - Handled or explicitly ignored mail is also recorded locally by normalized `Message-Id` so unread leftovers are skipped safely on later cron runs.
+- If `Message-Id` is missing, the runner now synthesizes a stable local fallback message key so skipped/handled mail still appears in `storage/state/message-state.json` and can be deduplicated on later runs.
 - SpamAssassin headers should be treated as heuristics only: severe/high-score messages may be skipped, but wrapper-style SpamAssassin rewrites should prefer local copy preservation plus body cleanup over blind skipping.
+- Reply chains are now first-class runtime input: subjects are matched without `Re:`/`Fwd:`/`Sv:` prefixes, quoted historical blocks are stripped before body matching/AI summaries, and outgoing replies preserve `In-Reply-To` / `References` headers.
+- No-match skips should be logged explicitly with mailbox/from/to/subject metadata so operators can diagnose `scanned` + `skipped` runs without reverse-engineering IMAP content.
+- No-match handling can now be config-gated to try one generic AI fallback reply (`generic_no_match_ai_enabled`) before ignoring; if fallback is disabled, unanswerable, or fails, the message remains ignored with a specific reason code.
+- Generic no-match outcome reasons should stay explicit in state/logs: `no_matching_rule_generic_ai_disabled`, `no_matching_rule_generic_ai_unanswerable`, `no_matching_rule_generic_ai_error`, `no_matching_rule_generic_ai_replied`.
 
 ## Runtime assumptions
 

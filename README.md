@@ -39,6 +39,7 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
    - `MAIL_ASSISTANT_TOOLS_TOKEN`
    - optional: `MAIL_ASSISTANT_SPAMASSASSIN_SKIP_SCORE` and `MAIL_ASSISTANT_SPAMASSASSIN_COPY_SCORE`
    - optional AI tuning: `MAIL_ASSISTANT_AI_MODEL`, `MAIL_ASSISTANT_AI_FALLBACK_MODEL`, `MAIL_ASSISTANT_AI_REASONING_EFFORT`
+   - optional no-match fallback gate: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1` (kept off by default unless enabled in Tools config or env)
 3. In Tools admin, open `/admin/mail-support-assistant`
 4. Create mailbox/rule config
 5. Generate or rotate a personal `provider_mail_support_assistant` token there
@@ -103,13 +104,27 @@ Rules can decide per message whether AI is enabled.
 - AI requests now default to a primary model (`gpt-5.4`) and retry once with a fallback model (`gpt-4o-mini`) if the primary call fails.
 - The same reasoning-effort setting is forwarded on both primary and fallback requests (`MAIL_ASSISTANT_AI_REASONING_EFFORT`, default `medium`).
 - Message bodies are sanitized (HTML/MIME noise stripped) before being sent as AI request summary context.
+- Reply-aware message parsing now strips common quoted history blocks before rule matching and AI summary generation, so follow-up emails in an existing thread can still match the intended support rule.
 - The token owner still needs approved `provider_openai` access in Tools unless that user is admin.
+
+### Generic AI fallback when no rule matches
+
+- If a mailbox message has no matching rule, the runner can optionally try one generic AI reply path instead of always ignoring.
+- This fallback is gated by config and is disabled unless explicitly enabled through one of these flags:
+  - mailbox defaults: `generic_no_match_ai_enabled` (preferred)
+  - top-level/settings/features variants from Tools config (`generic_no_match_ai_enabled` / `generic_reply_on_no_match`)
+  - env fallback: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1`
+- Generic fallback replies are only sent when the AI response looks usable (non-empty, not just a refusal/insufficient-context line).
+- If the fallback path is disabled, fails, or returns an unanswerable response, the message remains ignored.
 
 ## Notes
 
 - Unmatched mail is left untouched.
 - Cron/manual execution still only polls unread mail, but any message that gets handled or explicitly ignored is also persisted locally by normalized `Message-Id` (with a fallback key when the header is missing) so leftover unread mail is not processed twice.
 - Matchers currently support `from`, `to`, `subject`, and optional body text contains checks.
+- Subject matching is now reply-aware (`Re:`, `Fwd:`, `Sv:` prefixes are stripped before rule checks), and outgoing replies now preserve `In-Reply-To` / `References` headers so answers stay in the same thread.
+- Unmatched mail is now also logged more explicitly with mailbox/from/to/subject details, which makes `scanned` + `skipped` runs easier to diagnose.
+- No-match handling now records clearer state reasons such as `no_matching_rule_generic_ai_disabled`, `no_matching_rule_generic_ai_unanswerable`, `no_matching_rule_generic_ai_error`, and `no_matching_rule_generic_ai_replied`.
 - The runner now parses SpamAssassin headers so heavily flagged messages can be skipped before handling, while wrapper-style SpamAssassin rewrites can still be copied locally and stripped from the body before rule matching/AI.
 - Local SpamAssassin/debug copies are written under `storage/cache/message-copies/` when the runner detects a rewritten wrapper or another message worth preserving for review.
 - The mini dashboard now shows both the last run summary and the local `Message-Id` state so operators can see which mailbox records were already handled or ignored.

@@ -35,17 +35,20 @@ class ToolsApiClient
 
     public function generateAiReply(array $mailbox, array $rule, array $message): array
     {
-        $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
-        $cleanBody = $this->sanitizeSummaryText((string) ($message['body_text'] ?? ''), 2400);
         $primaryModel = trim((string) (($rule['reply']['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
         $fallbackModel = trim((string) Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'gpt-4o-mini'));
         $reasoningEffort = $this->normalizeReasoningEffort(($rule['reply']['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
+        $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
+        $cleanBody = $this->sanitizeSummaryText((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 2400);
 
         $contextLines = [
             'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
             'From: ' . (string) ($message['from'] ?? ''),
             'To: ' . (string) ($message['to'] ?? ''),
             'Subject: ' . (string) ($message['subject'] ?? ''),
+            'Subject (normalized): ' . (string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? '')),
+            'In-Reply-To: ' . (string) ($message['in_reply_to'] ?? ''),
+            'References: ' . implode(', ', array_values((array) ($message['references'] ?? []))),
             'SpamAssassin: present=' . (!empty($spam['present']) ? 'yes' : 'no')
                 . ', flagged=' . (!empty($spam['flagged']) ? 'yes' : 'no')
                 . ', score=' . (($spam['score'] ?? null) !== null ? (string) $spam['score'] : 'n/a')
@@ -71,6 +74,56 @@ class ToolsApiClient
             'client_version' => self::CLIENT_VERSION,
             'client_platform' => 'php_standalone',
         ];
+        return $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
+    }
+
+    public function generateGenericAiReply(array $mailbox, array $message, array $options = []): array
+    {
+        $primaryModel = trim((string) (($options['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
+        $fallbackModel = trim((string) (($options['ai_fallback_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'gpt-4o-mini')));
+        $reasoningEffort = $this->normalizeReasoningEffort(($options['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
+
+        $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
+        $cleanBody = $this->sanitizeSummaryText((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 2600);
+        $assistantHint = trim((string) ($options['custom_instruction'] ?? ''));
+        $userPrompt = 'A support email did not match any explicit mailbox rule. Reply briefly and helpfully only if the request seems answerable from the provided context. If key details are missing, ask a concise follow-up question.';
+        if ($assistantHint !== '') {
+            $userPrompt .= ' ' . $assistantHint;
+        }
+
+        $contextLines = [
+            'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
+            'From: ' . (string) ($message['from'] ?? ''),
+            'To: ' . (string) ($message['to'] ?? ''),
+            'Subject: ' . (string) ($message['subject'] ?? ''),
+            'Subject (normalized): ' . (string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? '')),
+            'In-Reply-To: ' . (string) ($message['in_reply_to'] ?? ''),
+            'References: ' . implode(', ', array_values((array) ($message['references'] ?? []))),
+            'SpamAssassin: present=' . (!empty($spam['present']) ? 'yes' : 'no')
+                . ', flagged=' . (!empty($spam['flagged']) ? 'yes' : 'no')
+                . ', score=' . (($spam['score'] ?? null) !== null ? (string) $spam['score'] : 'n/a')
+                . ', tests=' . implode(',', array_values((array) ($spam['tests'] ?? []))),
+            '',
+            'Request summary (sanitized):',
+            $cleanBody,
+        ];
+
+        $payload = [
+            'context' => trim(implode("\n", $contextLines)),
+            'user_prompt' => $userPrompt,
+            'modifier' => 'short',
+            'model' => $primaryModel,
+            'request_mode' => 'reply',
+            'client_name' => 'Tornevall Tools Mail Assistant',
+            'client_version' => self::CLIENT_VERSION,
+            'client_platform' => 'php_standalone',
+        ];
+
+        return $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
+    }
+
+    private function executeAiRequest(array $payload, string $primaryModel, string $fallbackModel, ?string $reasoningEffort): array
+    {
         if ($reasoningEffort !== null) {
             $payload['reasoning_effort'] = $reasoningEffort;
         }

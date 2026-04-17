@@ -120,6 +120,13 @@ class ImapMailboxClient
         $structure = @imap_fetchstructure($stream, $messageNo);
         [$textBody, $htmlBody] = $this->extractBodies($messageNo, $structure);
         $cleanedBody = MimeDecoder::stripSpamAssassinWrapper($textBody);
+        $bodyText = (string) ($cleanedBody['body'] ?? $textBody);
+        $bodyTextReplyAware = MimeDecoder::stripQuotedReplyText($bodyText);
+        $messageId = MimeDecoder::normalizeMessageId((string) ($headerMap['message-id'] ?? ''));
+        $inReplyTo = MimeDecoder::normalizeMessageId((string) ($headerMap['in-reply-to'] ?? ''));
+        $references = MimeDecoder::normalizeMessageIdList((string) ($headerMap['references'] ?? ''));
+        $subject = MimeDecoder::decodeHeader((string) ($overview->subject ?? ''));
+        $subjectNormalized = MimeDecoder::normalizeReplySubject($subject);
 
         $from = '';
         if ($headers && !empty($headers->from[0])) {
@@ -136,18 +143,30 @@ class ImapMailboxClient
         return [
             'uid' => $uid,
             'message_no' => $messageNo,
-            'subject' => MimeDecoder::decodeHeader((string) ($overview->subject ?? '')),
+            'message_id' => $messageId,
+            'message_key' => $messageId !== '' ? $messageId : strtolower(sha1(implode('|', [
+                $uid,
+                $subjectNormalized !== '' ? $subjectNormalized : $subject,
+                $from,
+                $to,
+                (string) ($overview->date ?? ''),
+            ]))),
+            'in_reply_to' => $inReplyTo,
+            'references' => $references,
+            'subject' => $subject,
+            'subject_normalized' => $subjectNormalized,
             'from' => MimeDecoder::decodeHeader($from),
             'to' => MimeDecoder::decodeHeader($to),
             'date' => (string) ($overview->date ?? ''),
             'headers_raw' => $rawHeaders,
             'headers_map' => $headerMap,
             'body_text_raw' => $textBody,
-            'body_text' => (string) ($cleanedBody['body'] ?? $textBody),
+            'body_text' => $bodyText,
+            'body_text_reply_aware' => $bodyTextReplyAware,
             'body_html' => $htmlBody,
             'spam_assassin' => MimeDecoder::analyzeSpamAssassin(
                 $headerMap,
-                (string) ($overview->subject ?? ''),
+                $subject,
                 $textBody
             ),
             'spam_assassin_wrapper_removed' => !empty($cleanedBody['wrapper_removed']),

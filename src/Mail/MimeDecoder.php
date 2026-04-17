@@ -48,6 +48,56 @@ class MimeDecoder
         return trim($body);
     }
 
+    public static function normalizeReplySubject(?string $subject): string
+    {
+        $subject = self::decodeHeader((string) ($subject ?? ''));
+        if ($subject === '') {
+            return '';
+        }
+
+        $normalized = trim($subject);
+        do {
+            $previous = $normalized;
+            $normalized = preg_replace('/^(?:(?:re|fw|fwd|sv)\s*:\s*)+/iu', '', $normalized) ?? $normalized;
+            $normalized = trim((string) $normalized);
+        } while ($normalized !== '' && $normalized !== $previous);
+
+        return $normalized;
+    }
+
+    public static function stripQuotedReplyText(string $body): string
+    {
+        $body = self::normalizeText($body);
+        if ($body === '') {
+            return '';
+        }
+
+        $lines = preg_split('/\n/', $body) ?: [];
+        $kept = [];
+        foreach ($lines as $line) {
+            $trimmed = trim((string) $line);
+            if ($trimmed !== '') {
+                if (preg_match('/^>/u', $trimmed) === 1) {
+                    break;
+                }
+                if (preg_match('/^On .+wrote:$/iu', $trimmed) === 1) {
+                    break;
+                }
+                if (preg_match('/^(From|Sent|To|Subject|Date):/iu', $trimmed) === 1 && count($kept) > 0) {
+                    break;
+                }
+                if (preg_match('/^[-_]{2,}\s*Original Message\s*[-_]{2,}$/iu', $trimmed) === 1) {
+                    break;
+                }
+            }
+
+            $kept[] = (string) $line;
+        }
+
+        $cleaned = trim(implode("\n", $kept));
+        return $cleaned !== '' ? $cleaned : $body;
+    }
+
     public static function parseHeaders(string $rawHeaders): array
     {
         $rawHeaders = self::normalizeText($rawHeaders);
@@ -92,6 +142,30 @@ class MimeDecoder
         $value = trim($value, "<> \t\n\r\0\x0B");
 
         return strtolower($value);
+    }
+
+    public static function normalizeMessageIdList(?string $value): array
+    {
+        $value = self::decodeHeader((string) ($value ?? ''));
+        if (trim($value) === '') {
+            return [];
+        }
+
+        preg_match_all('/<([^>]+)>/', $value, $matches);
+        $ids = array_values(array_filter(array_map(static function ($candidate): string {
+            return self::normalizeMessageId((string) $candidate);
+        }, (array) ($matches[1] ?? []))));
+
+        if (count($ids)) {
+            return array_values(array_unique($ids));
+        }
+
+        $parts = preg_split('/\s+/', trim($value)) ?: [];
+        $ids = array_values(array_filter(array_map(static function ($candidate): string {
+            return self::normalizeMessageId((string) $candidate);
+        }, $parts)));
+
+        return array_values(array_unique($ids));
     }
 
     public static function analyzeSpamAssassin(array $headers, string $subject = '', string $body = ''): array

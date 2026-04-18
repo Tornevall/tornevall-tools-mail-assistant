@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.6 - 2026-04-18
+
+- `message_state` summary `recent` list now only shows messages that are NOT yet handled (status ≠ `handled`).
+  Already-handled messages are still counted in `status_counts` and `count`, but are excluded from the `recent` view
+  so the dashboard only surfaces messages that still need attention.
+
 ## 0.3.5 - 2026-04-18
 
 - Added `pickup` transport mode: writes a properly-formatted RFC 2822 message file to a local MTA spool/pickup

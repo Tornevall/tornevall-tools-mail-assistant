@@ -109,6 +109,11 @@ class MessageStateStore
                 $statusCounts[$status]++;
             }
 
+            // recent: only show messages that are NOT already handled — i.e. still need attention.
+            $pendingMessages = array_values(array_filter($visibleMessages, static function (array $message): bool {
+                return strtolower(trim((string) ($message['status'] ?? ''))) !== 'handled';
+            }));
+
             $mailboxes[(string) $mailboxId] = [
                 'count' => count($visibleMessages),
                 'excluded_read_records' => $excludedReadRecords,
@@ -123,7 +128,7 @@ class MessageStateStore
                         'subject' => (string) ($message['subject'] ?? ''),
                         'recorded_at' => (string) ($message['recorded_at'] ?? ''),
                     ];
-                }, $visibleMessages), 0, 10),
+                }, $pendingMessages), 0, 10),
             ];
             $total += count($visibleMessages);
         }

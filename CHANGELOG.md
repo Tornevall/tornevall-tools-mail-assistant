@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.3.15 - 2026-04-18
+
+- Mail Support Assistant AI requests now explicitly default to the same reply language as the incoming mail (`response_language=auto`) instead of relying only on loose prompt inference.
+- The standalone AI fallback model now defaults to `o4`, and that fallback retry intentionally omits `reasoning_effort` metadata because `o4` should be treated as a non-reasoning fallback path here.
+- Malformed wrapper-style mails are now cleaned more aggressively before rule matching, AI context building, and reply excerpts: SpamAssassin wrapper text, forwarded `.eml` header dumps, and embedded header runs are stripped so the real original request survives.
+- Outgoing replies now also include a compact excerpt of the original request, making it easier to see what the sender actually wrote even when the inbound message body was messy.
+- AI failure messages now include the model trail that was attempted, so mailbox summaries show which model(s) produced an empty response or failed before a reply was aborted.
+
 ## 0.3.14 - 2026-04-18
 
 - Rule resolution now evaluates all matching rules before selecting a winner, so broad rules (for example generic Gmail sender matches) no longer silently override more specific rules such as copyright-notice flows.

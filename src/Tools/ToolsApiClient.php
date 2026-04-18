@@ -2,12 +2,13 @@
 
 namespace MailSupportAssistant\Tools;
 
+use MailSupportAssistant\Mail\MimeDecoder;
 use MailSupportAssistant\Support\Env;
 use RuntimeException;
 
 class ToolsApiClient
 {
-    private const CLIENT_VERSION = '0.3.14';
+    private const CLIENT_VERSION = '0.3.15';
 
     private string $baseUrl;
     private string $token;
@@ -53,10 +54,10 @@ class ToolsApiClient
     {
         $reply = (array) ($rule['reply'] ?? []);
         $primaryModel = trim((string) (($reply['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
-        $fallbackModel = trim((string) Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'gpt-4o-mini'));
+        $fallbackModel = trim((string) Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'o4'));
         $reasoningEffort = $this->normalizeReasoningEffort(($reply['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
         $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
-        $cleanBody = $this->sanitizeSummaryText((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 2400);
+        $cleanBody = $this->buildIncomingMessageExcerpt($message, 2400);
 
         $contextLines = [
             'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
@@ -79,7 +80,7 @@ class ToolsApiClient
         $responderName = trim((string) (($reply['responder_name'] ?? null) ?: ''));
         $personaProfile = trim((string) (($reply['persona_profile'] ?? null) ?: ''));
         $mood = trim((string) (($reply['mood'] ?? null) ?: ''));
-        $userPrompt = 'Reply helpfully to this support email.';
+        $userPrompt = 'Reply helpfully to this support email. Use the same language as the incoming email unless the sender explicitly asks for another language.';
 
         $payload = [
             'context' => trim(implode("\n", $contextLines)),
@@ -87,6 +88,7 @@ class ToolsApiClient
             'modifier' => 'short',
             'model' => $primaryModel,
             'request_mode' => 'reply',
+            'response_language' => 'auto',
             'client_name' => 'Tornevall Tools Mail Assistant',
             'client_version' => self::CLIENT_VERSION,
             'client_platform' => 'php_standalone',
@@ -110,13 +112,13 @@ class ToolsApiClient
     public function generateGenericAiReply(array $mailbox, array $message, array $options = []): array
     {
         $primaryModel = trim((string) (($options['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
-        $fallbackModel = trim((string) (($options['ai_fallback_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'gpt-4o-mini')));
+        $fallbackModel = trim((string) (($options['ai_fallback_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'o4')));
         $reasoningEffort = $this->normalizeReasoningEffort(($options['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
 
         $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
-        $cleanBody = $this->sanitizeSummaryText((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 2600);
+        $cleanBody = $this->buildIncomingMessageExcerpt($message, 2600);
         $assistantHint = trim((string) ($options['custom_instruction'] ?? ''));
-        $userPrompt = 'A support email did not match any explicit mailbox rule. Reply briefly and helpfully only if the request seems answerable from the provided context. If key details are missing, ask a concise follow-up question.';
+        $userPrompt = 'A support email did not match any explicit mailbox rule. Reply briefly and helpfully only if the request seems answerable from the provided context. Use the same language as the incoming email unless the sender explicitly asks for another language. If key details are missing, ask a concise follow-up question.';
 
         $contextLines = [
             'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
@@ -141,6 +143,7 @@ class ToolsApiClient
             'modifier' => 'short',
             'model' => $primaryModel,
             'request_mode' => 'reply',
+            'response_language' => 'auto',
             'client_name' => 'Tornevall Tools Mail Assistant',
             'client_version' => self::CLIENT_VERSION,
             'client_platform' => 'php_standalone',
@@ -154,27 +157,84 @@ class ToolsApiClient
 
     private function executeAiRequest(array $payload, string $primaryModel, string $fallbackModel, ?string $reasoningEffort): array
     {
-        if ($reasoningEffort !== null) {
-            $payload['reasoning_effort'] = $reasoningEffort;
-        }
+        $payload = $this->applyReasoningEffortToPayload($payload, $reasoningEffort);
 
         try {
             return $this->performAiRequestWithRetry($payload);
         } catch (RuntimeException $primaryFailure) {
             if ($fallbackModel === '' || strcasecmp($fallbackModel, $primaryModel) === 0) {
-                throw $primaryFailure;
+                throw new RuntimeException(
+                    'AI request failed (models tried: ' . $this->formatModelTrail($primaryModel) . '): ' . $primaryFailure->getMessage(),
+                    0,
+                    $primaryFailure
+                );
             }
 
             $fallbackPayload = $payload;
             $fallbackPayload['model'] = $fallbackModel;
-            $fallbackResult = $this->performAiRequestWithRetry($fallbackPayload);
+            $fallbackPayload = $this->applyReasoningEffortToPayload($fallbackPayload, $reasoningEffort);
+
+            try {
+                $fallbackResult = $this->performAiRequestWithRetry($fallbackPayload);
+            } catch (RuntimeException $fallbackFailure) {
+                throw new RuntimeException(
+                    'AI request failed (models tried: ' . $this->formatModelTrail($primaryModel, $fallbackModel) . '): ' . $fallbackFailure->getMessage(),
+                    0,
+                    $fallbackFailure
+                );
+            }
+
             if (!array_key_exists('used_fallback_model', $fallbackResult)) {
                 $fallbackResult['used_fallback_model'] = true;
             }
             $fallbackResult['fallback_from_model'] = $primaryModel;
+            if (!isset($fallbackResult['model']) || trim((string) $fallbackResult['model']) === '') {
+                $fallbackResult['model'] = $fallbackModel;
+            }
 
             return $fallbackResult;
         }
+    }
+
+    private function applyReasoningEffortToPayload(array $payload, ?string $reasoningEffort): array
+    {
+        unset($payload['reasoning_effort']);
+        if ($reasoningEffort === null) {
+            return $payload;
+        }
+
+        $model = strtolower(trim((string) ($payload['model'] ?? '')));
+        if (!$this->supportsReasoningEffort($model)) {
+            return $payload;
+        }
+
+        $payload['reasoning_effort'] = $reasoningEffort;
+
+        return $payload;
+    }
+
+    private function supportsReasoningEffort(string $model): bool
+    {
+        if ($model === '') {
+            return false;
+        }
+
+        return strpos($model, 'gpt-5') === 0
+            || strpos($model, 'gpt-4o') === 0
+            || strpos($model, 'o1') === 0
+            || strpos($model, 'o3') === 0;
+    }
+
+    private function formatModelTrail(string $primaryModel, string $fallbackModel = ''): string
+    {
+        $models = array_values(array_filter([
+            trim($primaryModel),
+            trim($fallbackModel),
+        ], static function (string $model): bool {
+            return $model !== '';
+        }));
+
+        return implode(' -> ', array_values(array_unique($models)));
     }
 
     private function performAiRequestWithRetry(array $payload): array
@@ -234,54 +294,25 @@ class ToolsApiClient
 
     private function sanitizeSummaryText(string $text, int $maxLength = 2400): string
     {
-        $text = str_replace(["\r\n", "\r"], "\n", $text);
-        $text = preg_replace('/<\s*br\s*\/?>/iu', "\n", $text) ?? $text;
-        $text = preg_replace('/<\s*\/\s*(div|p|li|ul|ol|h[1-6])\s*>/iu', "\n", $text) ?? $text;
-        $text = strip_tags($text);
-        $text = html_entity_decode($text, ENT_QUOTES, 'UTF-8');
+        return MimeDecoder::extractRequestSummaryText($text, $maxLength);
+    }
 
-        $lines = preg_split('/\n/', $text) ?: [];
-        $kept = [];
-        foreach ($lines as $line) {
-            $line = trim((string) $line);
-            if ($line === '') {
-                continue;
-            }
+    private function buildIncomingMessageExcerpt(array $message, int $maxLength): string
+    {
+        $candidates = [
+            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
+            (string) (($message['body_text'] ?? null) ?: ''),
+            (string) (($message['body_text_raw'] ?? null) ?: ''),
+        ];
 
-            if (preg_match('/^--[-_=.a-z0-9]+$/i', $line) === 1) {
-                continue;
+        foreach ($candidates as $candidate) {
+            $excerpt = $this->sanitizeSummaryText($candidate, $maxLength);
+            if ($excerpt !== '') {
+                return $excerpt;
             }
-            if (preg_match('/^(content-type|content-transfer-encoding|mime-version):/i', $line) === 1) {
-                continue;
-            }
-            if (preg_match('/^summary of your request:?$/i', $line) === 1) {
-                continue;
-            }
-
-            $kept[] = $line;
         }
 
-        $questionLines = array_values(array_filter($kept, static function (string $line): bool {
-            return preg_match('/\?$/u', $line) === 1;
-        }));
-        if (count($questionLines)) {
-            $kept = array_slice($questionLines, 0, 4);
-        }
-
-        $clean = trim(implode("\n", $kept));
-        if ($clean === '') {
-            $clean = trim((string) strip_tags($text));
-        }
-
-        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
-            if (mb_strlen($clean, 'UTF-8') > $maxLength) {
-                $clean = rtrim(mb_substr($clean, 0, $maxLength, 'UTF-8')) . '...';
-            }
-        } elseif (strlen($clean) > $maxLength) {
-            $clean = rtrim(substr($clean, 0, $maxLength)) . '...';
-        }
-
-        return $clean;
+        return '';
     }
 
     private function normalizeReasoningEffort($value): ?string

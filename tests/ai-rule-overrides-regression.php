@@ -80,6 +80,7 @@ assertSameValue('POST', $client->requests[0]['method'], 'Rule AI request should 
 assertSameValue('/ai/socialgpt/respond', $client->requests[0]['path'], 'Rule AI request should target the Tools SocialGPT endpoint.');
 assertSameValue('gpt-5.4', $rulePayload['model'] ?? null, 'Rule AI request should prefer the rule-selected model.');
 assertSameValue('high', $rulePayload['reasoning_effort'] ?? null, 'Rule AI request should forward per-rule reasoning effort.');
+assertSameValue('auto', $rulePayload['response_language'] ?? null, 'Rule AI request should default to matching the incoming mail language.');
 assertSameValue('Thomas', $rulePayload['responder_name_override'] ?? null, 'Rule AI request should forward responder override.');
 assertSameValue('Calm and factual support responder.', $rulePayload['persona_profile_override'] ?? null, 'Rule AI request should forward persona override.');
 assertSameValue('Confirm receipt, summarize the issue, and ask for any missing ticket number.', $rulePayload['custom_instruction_override'] ?? null, 'Rule AI request should forward custom instruction override.');
@@ -111,6 +112,7 @@ if (!is_array($genericPayload)) {
 
 assertSameValue('gpt-4o-mini', $genericPayload['model'] ?? null, 'Generic AI request should forward mailbox-selected model.');
 assertSameValue('medium', $genericPayload['reasoning_effort'] ?? null, 'Generic AI request should forward mailbox-selected reasoning effort.');
+assertSameValue('auto', $genericPayload['response_language'] ?? null, 'Generic AI request should also default to matching the incoming mail language.');
 assertSameValue('Answer politely and ask for missing account details when necessary.', $genericPayload['custom_instruction_override'] ?? null, 'Generic AI request should forward mailbox custom instruction as an override.');
 
 fwrite(STDOUT, "ai-rule-overrides-regression: ok\n");

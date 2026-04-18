@@ -3,6 +3,7 @@
 namespace MailSupportAssistant\Runner;
 
 use MailSupportAssistant\Mail\ImapMailboxClient;
+use MailSupportAssistant\Mail\MimeDecoder;
 use MailSupportAssistant\Support\Env;
 use MailSupportAssistant\Support\Logger;
 use MailSupportAssistant\Support\MessageStateStore;
@@ -681,11 +682,13 @@ class MailAssistantRunner
         $text = '';
         $template = trim((string) (($replyConfig['template_text'] ?? null) ?: ''));
         $lastAiError = '';
+        $lastAiModelTrail = $this->describeConfiguredAiModelTrail($replyConfig);
 
         if (!empty($replyConfig['ai_enabled'])) {
             try {
                 $aiResult = $this->tools->generateAiReply($mailbox, $rule, $message);
                 $text = trim((string) ($aiResult['response'] ?? ''));
+                $lastAiModelTrail = $this->describeAiModelTrailFromResult($aiResult, $lastAiModelTrail);
             } catch (Throwable $e) {
                 $lastAiError = trim($e->getMessage());
                 $this->logger->warning('AI reply generation failed, falling back to template.', ['error' => $e->getMessage()]);
@@ -697,6 +700,9 @@ class MailAssistantRunner
                 $reason = $lastAiError !== ''
                     ? 'AI reply generation failed: ' . $lastAiError
                     : 'AI reply generation returned an empty response.';
+                if ($lastAiModelTrail !== '') {
+                    $reason .= ' Models used: ' . $lastAiModelTrail . '.';
+                }
 
                 throw new RuntimeException($reason . ' No explicit fallback template is configured for this AI-enabled rule.');
             }
@@ -882,7 +888,7 @@ class MailAssistantRunner
             throw new RuntimeException('Cannot send reply because no From email is configured.');
         }
 
-        $replyContent = $this->buildReplyContent($body);
+        $replyContent = $this->buildReplyContent($body, $message);
         $headers = [
             'From: ' . $fromName . ' <' . $fromEmail . '>',
         ];
@@ -949,17 +955,19 @@ class MailAssistantRunner
         );
     }
 
-    private function buildReplyContent(string $body): array
+    private function buildReplyContent(string $body, array $message = []): array
     {
         $text = trim(str_replace(["\r\n", "\r"], "\n", $body));
+        $requestExcerpt = $this->buildOriginalRequestExcerpt($message);
+        $textWithExcerpt = $this->appendOriginalRequestExcerptToText($text, $requestExcerpt);
 
         return [
-            'text' => $text,
-            'html' => $text !== '' ? $this->buildStyledHtmlReply($text) : '',
+            'text' => $textWithExcerpt,
+            'html' => $textWithExcerpt !== '' ? $this->buildStyledHtmlReply($text, $requestExcerpt) : '',
         ];
     }
 
-    private function buildStyledHtmlReply(string $text): string
+    private function buildStyledHtmlReply(string $text, string $requestExcerpt = ''): string
     {
         $text = trim(str_replace(["\r\n", "\r"], "\n", $text));
         $paragraphs = preg_split('/\n\s*\n/u', $text) ?: [];
@@ -983,11 +991,91 @@ class MailAssistantRunner
                 . '</p>';
         }
 
+        $requestExcerptHtml = $this->renderOriginalRequestExcerptHtml($requestExcerpt);
+
         return '<!DOCTYPE html>'
             . '<html lang="und"><body style="margin:0;padding:24px;background-color:#f5f7fb;">'
             . '<div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 28px;box-shadow:0 1px 2px rgba(15,23,42,0.08);">'
             . implode('', $htmlBlocks)
+            . $requestExcerptHtml
             . '</div></body></html>';
+    }
+
+    private function buildOriginalRequestExcerpt(array $message, int $maxLength = 900): string
+    {
+        $candidates = [
+            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
+            (string) (($message['body_text'] ?? null) ?: ''),
+            (string) (($message['body_text_raw'] ?? null) ?: ''),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $excerpt = MimeDecoder::extractRequestSummaryText($candidate, $maxLength);
+            if ($excerpt !== '') {
+                return $excerpt;
+            }
+        }
+
+        return '';
+    }
+
+    private function appendOriginalRequestExcerptToText(string $text, string $requestExcerpt): string
+    {
+        $text = trim($text);
+        $requestExcerpt = trim($requestExcerpt);
+        if ($requestExcerpt === '') {
+            return $text;
+        }
+
+        $quotedLines = array_map(static function (string $line): string {
+            return '> ' . rtrim($line);
+        }, preg_split('/\r\n?|\n/', $requestExcerpt) ?: []);
+
+        return trim($text . "\n\nSummary of your request:\n" . implode("\n", $quotedLines));
+    }
+
+    private function renderOriginalRequestExcerptHtml(string $requestExcerpt): string
+    {
+        $requestExcerpt = trim($requestExcerpt);
+        if ($requestExcerpt === '') {
+            return '';
+        }
+
+        return '<div style="margin:18px 0 0 0;padding:16px;background:#f8fafc;border-left:4px solid #cbd5e1;border-radius:8px;">'
+            . '<div style="margin:0 0 10px 0;font-weight:bold;color:#111827;font-family:Arial,Helvetica,sans-serif;font-size:14px;">Summary of your request</div>'
+            . '<div style="color:#334155;white-space:pre-line;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:1.6;">'
+            . nl2br(htmlspecialchars($requestExcerpt, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false)
+            . '</div>'
+            . '</div>';
+    }
+
+    private function describeConfiguredAiModelTrail(array $replyConfig): string
+    {
+        $primary = trim((string) (($replyConfig['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
+        $fallback = trim((string) Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'o4'));
+
+        return $this->formatModelTrail($primary, $fallback);
+    }
+
+    private function describeAiModelTrailFromResult(array $aiResult, string $fallbackTrail = ''): string
+    {
+        $model = trim((string) ($aiResult['model'] ?? ''));
+        $fallbackFrom = trim((string) ($aiResult['fallback_from_model'] ?? ''));
+        $trail = $this->formatModelTrail($fallbackFrom, $model);
+
+        return $trail !== '' ? $trail : $fallbackTrail;
+    }
+
+    private function formatModelTrail(string $primaryModel, string $fallbackModel = ''): string
+    {
+        $models = array_values(array_filter([
+            trim($primaryModel),
+            trim($fallbackModel),
+        ], static function (string $model): bool {
+            return $model !== '';
+        }));
+
+        return implode(' -> ', array_values(array_unique($models)));
     }
 
     private function buildTransportMessageParts(array $headers, array $replyContent): array

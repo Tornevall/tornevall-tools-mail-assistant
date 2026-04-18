@@ -115,14 +115,17 @@ Rules can decide per message whether AI is enabled.
 - If a rule has `ai_enabled=false`, the client uses the static template text only.
 - If a rule has `ai_enabled=true`, the client calls Tools' `POST /api/ai/socialgpt/respond` with the same personal token and forwards that rule's responder/persona/custom instruction/model/reasoning as explicit one-request overrides.
 - For AI-enabled matched rules, the static template is now only a fallback if the AI call fails or returns an empty/non-usable response.
-- AI requests now default to a primary model (`gpt-5.4`) and retry once with a fallback model (`gpt-4o-mini`) if the primary call fails.
+- AI requests now default to a primary model (`gpt-5.4`) and retry once with a fallback model (`o4`) if the primary call fails.
 - Rate-limited AI failures (`429` / Too Many Attempts) are now retried automatically by the standalone client before it gives up on the AI path.
-- The same reasoning-effort setting is forwarded on both primary and fallback requests (`MAIL_ASSISTANT_AI_REASONING_EFFORT`, default `medium`).
-- Message bodies are sanitized (HTML/MIME noise stripped) before being sent as AI request summary context.
+- Reasoning effort is still configurable (`MAIL_ASSISTANT_AI_REASONING_EFFORT`, default `medium`), but the standalone fallback path now intentionally omits reasoning metadata when it retries through `o4`.
+- AI requests now explicitly ask Tools to answer in the same language as the incoming email by default (`response_language=auto`).
+- Message bodies are now sanitized more aggressively before they are sent as AI request summary context: HTML/MIME noise, SpamAssassin wrapper text, forwarded `.eml` header dumps, and malformed embedded header blocks are stripped first so the actual original request survives.
 - Reply-aware message parsing now strips common quoted history blocks before rule matching and AI summary generation, so follow-up emails in an existing thread can still match the intended support rule.
 - The token owner still needs approved `provider_openai` access in Tools unless that user is admin.
 - Outgoing replies are now sent as `multipart/alternative`: a plain-text part is kept for compatibility, while the visible mail is also rendered as a small styled HTML card for more polished support replies.
+- Outgoing replies now also append a compact excerpt of the original request, so the sent answer itself still shows what the user actually wrote even when the incoming mail was a malformed forwarded wrapper.
 - AI-enabled rules no longer fall back to the hardcoded generic sentence `Thank you for your message. We have reviewed it.` unless you explicitly configured a `template_text` fallback for that rule. If AI fails and no explicit template exists, the reply is aborted and the error is logged instead of sending a misleading canned answer.
+- Mailbox run errors for failed AI replies now also include which model(s) were tried, making empty-response or fallback-path failures easier to diagnose.
 
 ### Generic AI fallback when no rule matches
 
@@ -133,6 +136,7 @@ Rules can decide per message whether AI is enabled.
   - env fallback: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1`
 - Generic fallback replies are only sent when the AI response looks usable (non-empty, not just a refusal/insufficient-context line).
 - Mailbox-level unmatched-mail fallback can now also carry its own `generic_no_match_ai_reasoning_effort` override from Tools config; Tools still decides per selected model whether reasoning is actually forwarded.
+- The config payload from Tools can now also include additive `user.ai_daily_budget` metadata so operators can inspect the effective AI token cap/remaining budget that Mail Support Assistant shares with the SocialGPT reply endpoint.
 - If the fallback path is disabled, fails, or returns an unanswerable response, the message remains ignored.
 
 ## Notes

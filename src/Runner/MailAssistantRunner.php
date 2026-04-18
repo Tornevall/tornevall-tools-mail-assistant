@@ -733,9 +733,8 @@ class MailAssistantRunner
             throw new RuntimeException('Cannot send reply because no From email is configured.');
         }
 
+        $replyContent = $this->buildReplyContent($body);
         $headers = [
-            'MIME-Version: 1.0',
-            'Content-Type: text/plain; charset=UTF-8',
             'From: ' . $fromName . ' <' . $fromEmail . '>',
         ];
 
@@ -759,7 +758,11 @@ class MailAssistantRunner
         }
 
         if ($dryRun) {
-            $this->logger->info('DRY-RUN reply prepared.', ['to' => $to, 'subject' => $subject]);
+            $this->logger->info('DRY-RUN reply prepared.', [
+                'to' => $to,
+                'subject' => $subject,
+                'has_html' => !empty($replyContent['html']),
+            ]);
             return;
         }
 
@@ -778,7 +781,7 @@ class MailAssistantRunner
             }
 
             try {
-                $this->deliverReplyViaTransport($transport, $mailbox, $rule, $message, $to, $subject, $body, $headers, $attemptIndex === 0);
+                $this->deliverReplyViaTransport($transport, $mailbox, $rule, $message, $to, $subject, $replyContent, $headers, $attemptIndex === 0);
                 return;
             } catch (Throwable $transportError) {
                 $attemptErrors[] = $transport . ': ' . $transportError->getMessage();
@@ -795,6 +798,113 @@ class MailAssistantRunner
         throw new RuntimeException(
             'All configured mail transports failed. ' . implode(' | ', array_values(array_unique($attemptErrors)))
         );
+    }
+
+    private function buildReplyContent(string $body): array
+    {
+        $text = trim(str_replace(["\r\n", "\r"], "\n", $body));
+
+        return [
+            'text' => $text,
+            'html' => $text !== '' ? $this->buildStyledHtmlReply($text) : '',
+        ];
+    }
+
+    private function buildStyledHtmlReply(string $text): string
+    {
+        $text = trim(str_replace(["\r\n", "\r"], "\n", $text));
+        $paragraphs = preg_split('/\n\s*\n/u', $text) ?: [];
+        $htmlBlocks = [];
+
+        foreach ($paragraphs as $paragraph) {
+            $paragraph = trim((string) $paragraph);
+            if ($paragraph === '') {
+                continue;
+            }
+
+            $escaped = htmlspecialchars($paragraph, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+            $htmlBlocks[] = '<p style="margin:0 0 16px 0;color:#1f2937;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;">'
+                . nl2br($escaped, false)
+                . '</p>';
+        }
+
+        if (!count($htmlBlocks)) {
+            $htmlBlocks[] = '<p style="margin:0;color:#1f2937;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;">'
+                . nl2br(htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false)
+                . '</p>';
+        }
+
+        return '<!DOCTYPE html>'
+            . '<html lang="und"><body style="margin:0;padding:24px;background-color:#f5f7fb;">'
+            . '<div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:32px 28px;box-shadow:0 1px 2px rgba(15,23,42,0.08);">'
+            . implode('', $htmlBlocks)
+            . '</div></body></html>';
+    }
+
+    private function buildTransportMessageParts(array $headers, array $replyContent): array
+    {
+        $text = (string) ($replyContent['text'] ?? '');
+        $html = trim((string) ($replyContent['html'] ?? ''));
+        $transportHeaders = ['MIME-Version: 1.0'];
+
+        if ($html !== '') {
+            $boundary = $this->buildMimeBoundary();
+            $transportHeaders[] = 'Content-Type: multipart/alternative; boundary="' . $boundary . '"';
+
+            return [
+                'headers' => array_merge($transportHeaders, $headers),
+                'body' => $this->buildMultipartAlternativeBody($boundary, $text, $html),
+            ];
+        }
+
+        $transportHeaders[] = 'Content-Type: text/plain; charset=UTF-8';
+
+        return [
+            'headers' => array_merge($transportHeaders, $headers),
+            'body' => $text,
+        ];
+    }
+
+    private function buildMimeBoundary(): string
+    {
+        $random = function_exists('random_bytes')
+            ? bin2hex(random_bytes(12))
+            : md5(uniqid('mail_assistant_', true));
+
+        return '=_MailAssistant_' . $random;
+    }
+
+    private function buildMultipartAlternativeBody(string $boundary, string $text, string $html): string
+    {
+        return implode("\r\n", [
+            '--' . $boundary,
+            'Content-Type: text/plain; charset=UTF-8',
+            'Content-Transfer-Encoding: 8bit',
+            '',
+            $text,
+            '',
+            '--' . $boundary,
+            'Content-Type: text/html; charset=UTF-8',
+            'Content-Transfer-Encoding: 8bit',
+            '',
+            $html,
+            '',
+            '--' . $boundary . '--',
+        ]);
+    }
+
+    private function buildRawTransportMessage(string $to, string $subject, array $headers, string $body, bool $excludeBcc = false): string
+    {
+        if ($excludeBcc) {
+            $headers = array_values(array_filter($headers, static function (string $header): bool {
+                return stripos($header, 'Bcc:') !== 0;
+            }));
+        }
+
+        return implode("\r\n", array_merge([
+            'To: ' . $to,
+            'Subject: ' . $subject,
+        ], $headers, ['', $body]));
     }
 
     private function buildMailTransportPlan(): array
@@ -836,7 +946,7 @@ class MailAssistantRunner
         return count($normalized) ? $normalized : ['smtp'];
     }
 
-    private function deliverReplyViaTransport(string $transport, array $mailbox, array $rule, array $message, string $to, string $subject, string $body, array $headers, bool $isPrimary): void
+    private function deliverReplyViaTransport(string $transport, array $mailbox, array $rule, array $message, string $to, string $subject, array $replyContent, array $headers, bool $isPrimary): void
     {
         if ($transport === 'tools_api') {
             $this->sendReplyViaToolsRelay(
@@ -845,7 +955,7 @@ class MailAssistantRunner
                 $message,
                 $to,
                 $subject,
-                $body,
+                $replyContent,
                 $headers,
                 $isPrimary ? 'tools_api_primary' : 'fallback_after_transport_failure'
             );
@@ -853,35 +963,36 @@ class MailAssistantRunner
         }
 
         if ($transport === 'smtp') {
-            $this->sendReplyViaSmtp($to, $subject, $body, $headers);
+            $this->sendReplyViaSmtp($to, $subject, $replyContent, $headers);
             $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'smtp']);
             return;
         }
 
         if ($transport === 'pickup') {
-            $this->sendReplyViaPickup($to, $subject, $body, $headers);
+            $this->sendReplyViaPickup($to, $subject, $replyContent, $headers);
             $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'pickup']);
             return;
         }
 
         if ($transport === 'custom_mta') {
-            $this->sendReplyViaCustomMta($to, $subject, $body, $headers);
+            $this->sendReplyViaCustomMta($to, $subject, $replyContent, $headers);
             $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'custom_mta']);
             return;
         }
 
-        $this->sendReplyViaPhpMail($to, $subject, $body, $headers);
+        $this->sendReplyViaPhpMail($to, $subject, $replyContent, $headers);
         $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'php_mail']);
     }
 
-    private function sendReplyViaPhpMail(string $to, string $subject, string $body, array $headers): void
+    private function sendReplyViaPhpMail(string $to, string $subject, array $replyContent, array $headers): void
     {
-        if (!@mail($to, $subject, $body, implode("\r\n", $headers))) {
+        $messageParts = $this->buildTransportMessageParts($headers, $replyContent);
+        if (!@mail($to, $subject, (string) $messageParts['body'], implode("\r\n", (array) $messageParts['headers']))) {
             throw new RuntimeException('PHP mail() failed while sending a reply.');
         }
     }
 
-    private function sendReplyViaCustomMta(string $to, string $subject, string $body, array $headers): void
+    private function sendReplyViaCustomMta(string $to, string $subject, array $replyContent, array $headers): void
     {
         $command = trim((string) Env::get('MAIL_ASSISTANT_MTA_COMMAND', ''));
         if ($command === '') {
@@ -893,10 +1004,13 @@ class MailAssistantRunner
             throw new RuntimeException('Could not open custom MTA command: ' . $command);
         }
 
-        $rawMessage = implode("\r\n", array_merge([
-            'To: ' . $to,
-            'Subject: ' . $subject,
-        ], $headers, ['', $body]));
+        $messageParts = $this->buildTransportMessageParts($headers, $replyContent);
+        $rawMessage = $this->buildRawTransportMessage(
+            $to,
+            $subject,
+            (array) $messageParts['headers'],
+            (string) $messageParts['body']
+        );
 
         fwrite($process, $rawMessage);
         $result = pclose($process);
@@ -905,7 +1019,7 @@ class MailAssistantRunner
         }
     }
 
-    private function sendReplyViaPickup(string $to, string $subject, string $body, array $headers): void
+    private function sendReplyViaPickup(string $to, string $subject, array $replyContent, array $headers): void
     {
         $dir = rtrim(trim((string) Env::get('MAIL_ASSISTANT_PICKUP_DIR', '')), '/\\');
         if ($dir === '') {
@@ -916,17 +1030,20 @@ class MailAssistantRunner
         }
 
         $filename = $dir . DIRECTORY_SEPARATOR . 'mail-' . uniqid('', true) . '.msg';
-        $rawMessage = implode("\r\n", array_merge([
-            'To: ' . $to,
-            'Subject: ' . $subject,
-        ], $headers, ['', $body]));
+        $messageParts = $this->buildTransportMessageParts($headers, $replyContent);
+        $rawMessage = $this->buildRawTransportMessage(
+            $to,
+            $subject,
+            (array) $messageParts['headers'],
+            (string) $messageParts['body']
+        );
 
         if (@file_put_contents($filename, $rawMessage) === false) {
             throw new RuntimeException('Could not write message to pickup directory: ' . $filename);
         }
     }
 
-    private function sendReplyViaSmtp(string $to, string $subject, string $body, array $headers): void
+    private function sendReplyViaSmtp(string $to, string $subject, array $replyContent, array $headers): void
     {
         $host = trim((string) Env::get('MAIL_ASSISTANT_SMTP_HOST', ''));
         $port = (int) Env::get('MAIL_ASSISTANT_SMTP_PORT', '587');
@@ -1014,18 +1131,14 @@ class MailAssistantRunner
 
             $this->smtpCommand($socket, 'DATA', [354], 'SMTP DATA');
 
-            $dataHeaders = [];
-            foreach ($headers as $header) {
-                if (stripos($header, 'Bcc:') === 0) {
-                    continue;
-                }
-                $dataHeaders[] = $header;
-            }
-
-            $raw = implode("\r\n", array_merge([
-                'To: ' . $to,
-                'Subject: ' . $subject,
-            ], $dataHeaders, ['', $body]));
+            $messageParts = $this->buildTransportMessageParts($headers, $replyContent);
+            $raw = $this->buildRawTransportMessage(
+                $to,
+                $subject,
+                (array) $messageParts['headers'],
+                (string) $messageParts['body'],
+                true
+            );
             $raw = str_replace(["\r\n", "\r"], "\n", $raw);
             $raw = preg_replace('/^\./m', '..', $raw) ?? $raw;
             $raw = str_replace("\n", "\r\n", $raw);
@@ -1117,7 +1230,7 @@ class MailAssistantRunner
         array $message,
         string $to,
         string $subject,
-        string $body,
+        array $replyContent,
         array $headers,
         string $mode
     ): void {
@@ -1149,7 +1262,8 @@ class MailAssistantRunner
             'bcc' => array_values(array_filter($bcc)),
             'from' => $fromHeader,
             'subject' => $subject,
-            'body' => $body,
+            'body' => (string) ($replyContent['text'] ?? ''),
+            'body_html' => (string) ($replyContent['html'] ?? ''),
             'message_meta' => [
                 'message_id' => (string) ($message['message_id'] ?? ''),
                 'uid' => (int) ($message['uid'] ?? 0),

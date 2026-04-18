@@ -48,6 +48,8 @@ It is expected to:
 - Reply chains are now first-class runtime input: subjects are matched without `Re:`/`Fwd:`/`Sv:` prefixes, quoted
   historical blocks are stripped before body matching/AI summaries, and outgoing replies preserve `In-Reply-To` /
   `References` headers.
+- Outgoing replies are now composed as `multipart/alternative`: keep the plain-text reply body, but also derive a
+  styled HTML body so ordinary mail clients see a formatted support reply instead of raw plain text.
 - No-match skips should be logged explicitly with mailbox/from/to/subject metadata so operators can diagnose `scanned` +
   `skipped` runs without reverse-engineering IMAP content.
 - No-match handling can now be config-gated to try one generic AI fallback reply (`generic_no_match_ai_enabled`) before
@@ -76,6 +78,8 @@ It is expected to:
   `MAIL_ASSISTANT_SMTP_TIMEOUT`, and optional `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE`.
 - If local delivery fails and `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`, the runner may retry through
   `POST /api/mail-support-assistant/send-reply` using `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`.
+- Tools relay payloads may now include additive `body_html`; when present, relay delivery should preserve the same
+  multipart plain-text + HTML reply body instead of downgrading to text only.
 - Tools relay tokens are expected to be dedicated personal keys (provider `provider_mail_support_assistant_mailer`) and
   should be permission-gated server-side (`mail-support-assistant.relay`).
 - Mailbox config may now also expose `generic_no_match_ai_reasoning_effort`, and matched rules may now expose `ai_reasoning_effort`.

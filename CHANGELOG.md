@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.13 - 2026-04-18
+
+- Outgoing replies are now emitted as `multipart/alternative` across standalone transports, with a plain-text fallback plus a styled HTML version for better-looking support mail.
+- Tools relay payloads from the standalone client now also include additive `body_html`, so fallback relay delivery keeps the same formatted reply body instead of downgrading to plain text only.
+
 ## 0.3.12 - 2026-04-18
 
 - AI-enabled matched rules now forward `responder_name`, `persona_profile`, `custom_instruction`, `ai_model`, and `ai_reasoning_effort` to Tools as explicit one-request overrides instead of only looking like generic/static replies.

@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.9 - 2026-04-18
+
+- Outgoing mail transport now supports an explicit ordered fallback chain through `MAIL_ASSISTANT_MAIL_FALLBACK_TRANSPORTS`.
+- If primary transport is `tools_api` but `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN` is missing, the runner now skips relay mode cleanly and continues with SMTP/local fallback transports instead of failing the whole reply attempt.
+- Legacy `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true` behavior is still supported and now acts as a compatibility shortcut when no explicit fallback chain is configured.
+
 ## 0.3.8 - 2026-04-18
 
 - `message_state` summary now exposes `count_pending` and `count_already_replied` so it is immediately clear how many

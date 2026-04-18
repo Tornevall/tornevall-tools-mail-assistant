@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.11 - 2026-04-18
+
+- Messages skipped because no rule matches, or because the generic no-match fallback is disabled/unanswerable/failing, now stay unread instead of being marked seen.
+- `mark_seen_on_skip` is now only honored for explicit heuristic skips such as high-score SpamAssassin junk, so misconfigured mailbox rules are easier to revisit.
+
 ## 0.3.10 - 2026-04-18
 
 - SMTP delivery now treats blank `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, and `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE` as optional overrides instead of invalid configuration.

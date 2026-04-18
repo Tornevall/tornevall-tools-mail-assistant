@@ -148,7 +148,7 @@ class MailAssistantRunner
             ];
 
             try {
-                $imap = new ImapMailboxClient((array) ($mailbox['imap'] ?? []));
+                $imap = $this->createImapMailboxClient((array) ($mailbox['imap'] ?? []));
                 $messages = $imap->fetchUnseenMessages($limitOverride ?: (int) (($mailbox['defaults']['run_limit'] ?? 20) ?: 20));
                 $mailboxSummary['scanned'] = count($messages);
                 $summary['messages_scanned'] += count($messages);
@@ -206,7 +206,7 @@ class MailAssistantRunner
                             'reason' => $spamDecision['reason'] ?? null,
                             'score' => $message['spam_assassin']['score'] ?? null,
                         ]);
-                        if (!empty($mailbox['defaults']['mark_seen_on_skip']) && !$dryRun) {
+                        if ($this->shouldMarkSeenOnSkip($mailbox, (string) ($spamDecision['reason'] ?? '')) && !$dryRun) {
                             $imap->markSeen((int) $message['uid']);
                         }
                         continue;
@@ -235,7 +235,7 @@ class MailAssistantRunner
                             'to' => $message['to'] ?? null,
                             'generic_no_match_reason' => $genericNoMatch['reason'] ?? null,
                         ]);
-                        if (!empty($mailbox['defaults']['mark_seen_on_skip']) && !$dryRun) {
+                        if ($this->shouldMarkSeenOnSkip($mailbox, (string) ($genericNoMatch['reason'] ?? '')) && !$dryRun) {
                             $imap->markSeen((int) $message['uid']);
                         }
                         continue;
@@ -311,6 +311,29 @@ class MailAssistantRunner
         }
 
         return stripos($haystack, $needle) !== false;
+    }
+
+    protected function createImapMailboxClient(array $config): ImapMailboxClient
+    {
+        return new ImapMailboxClient($config);
+    }
+
+    private function shouldMarkSeenOnSkip(array $mailbox, string $reason): bool
+    {
+        if (empty($mailbox['defaults']['mark_seen_on_skip'])) {
+            return false;
+        }
+
+        $reason = strtolower(trim($reason));
+        if ($reason === '') {
+            return false;
+        }
+
+        if (strpos($reason, 'no_matching_rule') === 0) {
+            return false;
+        }
+
+        return true;
     }
 
     private function tryHandleGenericNoMatch(ImapMailboxClient $imap, array $config, array $mailbox, array $message, bool $dryRun): array

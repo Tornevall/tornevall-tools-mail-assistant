@@ -129,6 +129,8 @@ Rules can decide per message whether AI is enabled.
 ## Notes
 
 - Unmatched mail is left untouched.
+- If a message is skipped because no rule matches or the generic no-match fallback is disabled, unanswerable, or fails, it now stays unread even when `mark_seen_on_skip` is enabled.
+- `mark_seen_on_skip` now only applies to deliberate heuristic skips such as high-score SpamAssassin junk, not to configuration-driven no-match cases.
 - Cron/manual execution only polls unread mail. Already-read mail is skipped immediately.
 - Unread mail may be reprocessed on later runs even if the same `Message-Id` already exists in local history; the local state file is now diagnostic history only and is no longer used as a dedupe gate.
 - Matchers currently support `from`, `to`, `subject`, and optional body text contains checks.

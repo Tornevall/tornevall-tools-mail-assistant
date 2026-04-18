@@ -57,11 +57,14 @@ class MailAssistantRunner
             'messages_handled' => 0,
             'messages_skipped' => 0,
             'messages_state_skipped' => 0,
+            'messages_previously_recorded_unread' => 0,
             'messages_spamassassin_skipped' => 0,
+            'messages_read_skipped' => 0,
             'spamassassin_copies_saved' => 0,
             'errors' => [],
             'mailboxes' => [],
             'message_state' => $this->messageState->summary(),
+            'message_state_mode' => 'history_only',
         ];
 
         try {
@@ -88,7 +91,9 @@ class MailAssistantRunner
                 'handled' => 0,
                 'skipped' => 0,
                 'state_skipped' => 0,
+                'previously_recorded_unread' => 0,
                 'spamassassin_skipped' => 0,
+                'read_skipped' => 0,
                 'spamassassin_copies_saved' => 0,
                 'message_state_records' => [],
                 'errors' => [],
@@ -101,23 +106,37 @@ class MailAssistantRunner
                 $summary['messages_scanned'] += count($messages);
 
                 foreach ($messages as $message) {
+                    if (!empty($message['is_seen'])) {
+                        $mailboxSummary['skipped']++;
+                        $mailboxSummary['read_skipped']++;
+                        $summary['messages_skipped']++;
+                        $summary['messages_read_skipped']++;
+                        $this->logger->info('Message skipped because it was already marked read at ingest.', [
+                            'mailbox' => $mailbox['name'] ?? null,
+                            'uid' => $message['uid'] ?? null,
+                            'message_id' => $message['message_id'] ?? null,
+                        ]);
+                        continue;
+                    }
+
                     $messageKey = $this->resolveMessageKey($message);
                     $messageId = (string) ($message['message_id'] ?? '');
-                    if ($messageKey !== '' && $this->messageState->hasRecord((int) $mailboxSummary['id'], $messageKey)) {
-                        $mailboxSummary['skipped']++;
-                        $mailboxSummary['state_skipped']++;
-                        $summary['messages_skipped']++;
-                        $summary['messages_state_skipped']++;
-                        $this->logger->info('Message skipped because it was already recorded locally.', [
+                    $priorState = null;
+                    if ($messageKey !== '') {
+                        $priorState = $this->messageState->getRecord((int) $mailboxSummary['id'], $messageKey);
+                    }
+                    if (is_array($priorState)) {
+                        $mailboxSummary['previously_recorded_unread']++;
+                        $summary['messages_previously_recorded_unread']++;
+                        $this->logger->info('Unread message was seen in local history and will be re-evaluated.', [
                             'mailbox' => $mailbox['name'] ?? null,
                             'uid' => $message['uid'] ?? null,
                             'message_id' => $messageId,
                             'message_key' => $messageKey,
+                            'previous_status' => $priorState['status'] ?? null,
+                            'previous_reason' => $priorState['reason'] ?? null,
+                            'previous_recorded_at' => $priorState['recorded_at'] ?? null,
                         ]);
-                        if (!$dryRun) {
-                            $imap->markSeen((int) ($message['uid'] ?? 0));
-                        }
-                        continue;
                     }
 
                     $spamDecision = $this->evaluateSpamAssassin($message);
@@ -198,7 +217,9 @@ class MailAssistantRunner
             'messages_handled' => $summary['messages_handled'],
             'messages_skipped' => $summary['messages_skipped'],
             'messages_state_skipped' => $summary['messages_state_skipped'],
+            'messages_previously_recorded_unread' => $summary['messages_previously_recorded_unread'],
             'messages_spamassassin_skipped' => $summary['messages_spamassassin_skipped'],
+            'messages_read_skipped' => $summary['messages_read_skipped'],
             'spamassassin_copies_saved' => $summary['spamassassin_copies_saved'],
             'errors' => count($summary['errors']),
         ]);
@@ -671,11 +692,123 @@ class MailAssistantRunner
             return;
         }
 
+        $transport = strtolower(trim((string) Env::get('MAIL_ASSISTANT_MAIL_TRANSPORT', 'php_mail')));
+        if (!in_array($transport, ['php_mail', 'custom_mta', 'tools_api'], true)) {
+            $transport = 'php_mail';
+        }
+
+        $fallbackToTools = Env::bool('MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API', true);
+
+        try {
+            if ($transport === 'tools_api') {
+                $this->sendReplyViaToolsRelay($mailbox, $rule, $message, $to, $subject, $body, $headers, 'tools_api_primary');
+                return;
+            }
+
+            if ($transport === 'custom_mta') {
+                $this->sendReplyViaCustomMta($to, $subject, $body, $headers);
+                $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'custom_mta']);
+                return;
+            }
+
+            $this->sendReplyViaPhpMail($to, $subject, $body, $headers);
+            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'php_mail']);
+        } catch (Throwable $primaryError) {
+            if (!$fallbackToTools) {
+                throw $primaryError;
+            }
+
+            $this->logger->warning('Primary mail transport failed, trying Tools relay fallback.', [
+                'to' => $to,
+                'subject' => $subject,
+                'transport' => $transport,
+                'error' => $primaryError->getMessage(),
+            ]);
+
+            $this->sendReplyViaToolsRelay($mailbox, $rule, $message, $to, $subject, $body, $headers, 'fallback_after_' . $transport);
+        }
+    }
+
+    private function sendReplyViaPhpMail(string $to, string $subject, string $body, array $headers): void
+    {
         if (!@mail($to, $subject, $body, implode("\r\n", $headers))) {
             throw new RuntimeException('PHP mail() failed while sending a reply.');
         }
+    }
 
-        $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject]);
+    private function sendReplyViaCustomMta(string $to, string $subject, string $body, array $headers): void
+    {
+        $command = trim((string) Env::get('MAIL_ASSISTANT_MTA_COMMAND', '/usr/sbin/sendmail -t -i'));
+        if ($command === '') {
+            throw new RuntimeException('MAIL_ASSISTANT_MTA_COMMAND is empty.');
+        }
+
+        $process = @popen($command, 'w');
+        if (!is_resource($process)) {
+            throw new RuntimeException('Could not open custom MTA command: ' . $command);
+        }
+
+        $rawMessage = implode("\r\n", array_merge([
+            'To: ' . $to,
+            'Subject: ' . $subject,
+        ], $headers, ['', $body]));
+
+        fwrite($process, $rawMessage);
+        $result = pclose($process);
+        if ($result !== 0) {
+            throw new RuntimeException('Custom MTA command failed with exit code ' . $result . '.');
+        }
+    }
+
+    private function sendReplyViaToolsRelay(
+        array $mailbox,
+        array $rule,
+        array $message,
+        string $to,
+        string $subject,
+        string $body,
+        array $headers,
+        string $mode
+    ): void {
+        $fromHeader = '';
+        foreach ($headers as $header) {
+            if (stripos($header, 'From:') === 0) {
+                $fromHeader = trim(substr($header, 5));
+                break;
+            }
+        }
+
+        $cc = [];
+        $bcc = [];
+        foreach ($headers as $header) {
+            if (stripos($header, 'Cc:') === 0) {
+                $cc[] = trim(substr($header, 3));
+            }
+            if (stripos($header, 'Bcc:') === 0) {
+                $bcc[] = trim(substr($header, 4));
+            }
+        }
+
+        $this->tools->sendReplyViaTools([
+            'mailbox_id' => (int) ($mailbox['id'] ?? 0),
+            'rule_id' => (int) ($rule['id'] ?? 0),
+            'mode' => $mode,
+            'to' => $to,
+            'cc' => array_values(array_filter($cc)),
+            'bcc' => array_values(array_filter($bcc)),
+            'from' => $fromHeader,
+            'subject' => $subject,
+            'body' => $body,
+            'message_meta' => [
+                'message_id' => (string) ($message['message_id'] ?? ''),
+                'uid' => (int) ($message['uid'] ?? 0),
+                'from' => (string) ($message['from'] ?? ''),
+                'to' => (string) ($message['to'] ?? ''),
+                'date' => (string) ($message['date'] ?? ''),
+            ],
+        ]);
+
+        $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'tools_api', 'mode' => $mode]);
     }
 }
 

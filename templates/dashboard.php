@@ -82,11 +82,12 @@
 
     <div class="grid" style="margin-top:16px;">
         <div class="card">
-            <h2 style="margin-top:0;">Local Message-Id state</h2>
+            <h2 style="margin-top:0;">Local message history</h2>
+            <p class="muted">This file is diagnostic history only. Unread IMAP messages may still be re-evaluated on later runs even if they already appear here.</p>
             <?php if (!empty($messageState)): ?>
                 <pre id="message-state-panel"><?php echo htmlspecialchars(json_encode($messageState, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre>
             <?php else: ?>
-                <pre id="message-state-panel">No local Message-Id state has been recorded yet.</pre>
+                <pre id="message-state-panel">No local message history has been recorded yet.</pre>
             <?php endif; ?>
         </div>
 
@@ -142,7 +143,7 @@
             lastRunPanel.textContent = pretty(data?.lastRun ?? 'No local run summary has been saved yet.');
         }
         if (messageStatePanel) {
-            messageStatePanel.textContent = pretty(data?.messageState ?? 'No local Message-Id state has been recorded yet.');
+            messageStatePanel.textContent = pretty(data?.messageState ?? 'No local message history has been recorded yet.');
         }
         if (logPanel) {
             logPanel.textContent = Array.isArray(data?.logLines) && data.logLines.length

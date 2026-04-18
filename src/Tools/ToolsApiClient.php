@@ -11,11 +11,13 @@ class ToolsApiClient
 
     private string $baseUrl;
     private string $token;
+    private string $mailToken;
 
     public function __construct(?string $baseUrl = null, ?string $token = null)
     {
         $this->baseUrl = rtrim((string) ($baseUrl ?: Env::get('MAIL_ASSISTANT_TOOLS_BASE_URL', 'https://tools.tornevall.net/api')), '/');
         $this->token = trim((string) ($token ?: Env::get('MAIL_ASSISTANT_TOOLS_TOKEN', '')));
+        $this->mailToken = trim((string) Env::get('MAIL_ASSISTANT_TOOLS_MAIL_TOKEN', ''));
     }
 
     public function getBaseUrl(): string
@@ -28,9 +30,23 @@ class ToolsApiClient
         return $this->token !== '';
     }
 
+    public function hasMailToken(): bool
+    {
+        return $this->mailToken !== '';
+    }
+
     public function fetchConfig(): array
     {
         return $this->request('GET', '/mail-support-assistant/config');
+    }
+
+    public function sendReplyViaTools(array $payload): array
+    {
+        if (!$this->hasMailToken()) {
+            throw new RuntimeException('MAIL_ASSISTANT_TOOLS_MAIL_TOKEN is not configured.');
+        }
+
+        return $this->request('POST', '/mail-support-assistant/send-reply', $payload, $this->mailToken);
     }
 
     public function generateAiReply(array $mailbox, array $rule, array $message): array
@@ -209,9 +225,10 @@ class ToolsApiClient
         return in_array($value, ['none', 'low', 'medium', 'high', 'xhigh'], true) ? $value : null;
     }
 
-    public function request(string $method, string $path, ?array $payload = null): array
+    public function request(string $method, string $path, ?array $payload = null, ?string $tokenOverride = null): array
     {
-        if (!$this->hasToken()) {
+        $token = trim((string) ($tokenOverride ?? $this->token));
+        if ($token === '') {
             throw new RuntimeException('MAIL_ASSISTANT_TOOLS_TOKEN is not configured.');
         }
 
@@ -223,7 +240,7 @@ class ToolsApiClient
         $url = $this->baseUrl . '/' . ltrim($path, '/');
         $headers = [
             'Accept: application/json',
-            'Authorization: Bearer ' . $this->token,
+            'Authorization: Bearer ' . $token,
         ];
 
         curl_setopt_array($ch, [
@@ -256,12 +273,47 @@ class ToolsApiClient
             throw new RuntimeException('Tools request returned a non-JSON response (HTTP ' . $status . ').');
         }
 
-        if ($status >= 400 || (!empty($decoded['ok']) === false && isset($decoded['message']))) {
-            $message = (string) ($decoded['message'] ?? $decoded['error'] ?? ('HTTP ' . $status));
+        if ($status >= 400 || (!empty($decoded['ok']) === false && (isset($decoded['message']) || isset($decoded['error'])))) {
+            $message = $this->stringifyApiValue($decoded['message'] ?? $decoded['error'] ?? ('HTTP ' . $status));
             throw new RuntimeException($message);
         }
 
         return $decoded;
+    }
+
+    private function stringifyApiValue($value): string
+    {
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            return $trimmed !== '' ? $trimmed : 'Unknown API error.';
+        }
+
+        if (is_numeric($value) || is_bool($value)) {
+            return (string) $value;
+        }
+
+        if (is_array($value)) {
+            $flat = [];
+            array_walk_recursive($value, static function ($entry) use (&$flat): void {
+                if (is_scalar($entry)) {
+                    $entry = trim((string) $entry);
+                    if ($entry !== '') {
+                        $flat[] = $entry;
+                    }
+                }
+            });
+
+            if (count($flat)) {
+                return implode('; ', array_values(array_unique($flat)));
+            }
+
+            $json = json_encode($value, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+            if (is_string($json) && $json !== '') {
+                return $json;
+            }
+        }
+
+        return 'Unknown API error.';
     }
 }
 

@@ -1,12 +1,12 @@
 {
-    "updated_at": "2026-04-17T20:57:18+02:00",
+    "updated_at": "2026-04-18T09:52:23+02:00",
     "mailboxes": {
         "1": {
             "messages": {
                 "cab0dji6e4tgtbouw=1chckpdvzjsowufl9uoskdns8uram5h4a@mail.gmail.com": {
                     "message_id": "cab0dji6e4tgtbouw=1chckpdvzjsowufl9uoskdns8uram5h4a@mail.gmail.com",
-                    "status": "ignored",
-                    "reason": "no_matching_rule",
+                    "status": "handled",
+                    "reason": "rule_matched",
                     "subject": "question about delisting",
                     "from": "thomas.tornevall@gmail.com",
                     "to": "support@tornevall.net",
@@ -15,12 +15,12 @@
                     "dry_run": false,
                     "message_key": "cab0dji6e4tgtbouw=1chckpdvzjsowufl9uoskdns8uram5h4a@mail.gmail.com",
                     "mailbox_id": 1,
-                    "recorded_at": "2026-04-17T20:57:18+02:00"
+                    "recorded_at": "2026-04-18T09:48:12+02:00"
                 },
                 "cab0dji6unh4js+dyd+bagtcwvvdomtkbhopw0cvter+d-jp1jq@mail.gmail.com": {
                     "message_id": "cab0dji6unh4js+dyd+bagtcwvvdomtkbhopw0cvter+d-jp1jq@mail.gmail.com",
-                    "status": "ignored",
-                    "reason": "no_matching_rule",
+                    "status": "handled",
+                    "reason": "rule_matched",
                     "subject": "help with delisting",
                     "from": "thomas.tornevall@gmail.com",
                     "to": "support@tornevall.net",
@@ -29,12 +29,12 @@
                     "dry_run": false,
                     "message_key": "cab0dji6unh4js+dyd+bagtcwvvdomtkbhopw0cvter+d-jp1jq@mail.gmail.com",
                     "mailbox_id": 1,
-                    "recorded_at": "2026-04-17T20:57:18+02:00"
+                    "recorded_at": "2026-04-18T09:48:16+02:00"
                 },
                 "cab0dji7wpsn8+une2v=x0hobsmn+cedt_9qbtq8wjo=g3kmvwq@mail.gmail.com": {
                     "message_id": "cab0dji7wpsn8+une2v=x0hobsmn+cedt_9qbtq8wjo=g3kmvwq@mail.gmail.com",
-                    "status": "ignored",
-                    "reason": "no_matching_rule",
+                    "status": "handled",
+                    "reason": "rule_matched",
                     "subject": "delisting",
                     "from": "thomas.tornevall@gmail.com",
                     "to": "support@tornevall.net",
@@ -43,12 +43,12 @@
                     "dry_run": false,
                     "message_key": "cab0dji7wpsn8+une2v=x0hobsmn+cedt_9qbtq8wjo=g3kmvwq@mail.gmail.com",
                     "mailbox_id": 1,
-                    "recorded_at": "2026-04-17T20:57:18+02:00"
+                    "recorded_at": "2026-04-18T09:48:23+02:00"
                 },
                 "cab0dji6hcz--lshhfb_noat6xbh_eqqcuzryveyra=idw6qswg@mail.gmail.com": {
                     "message_id": "cab0dji6hcz--lshhfb_noat6xbh_eqqcuzryveyra=idw6qswg@mail.gmail.com",
-                    "status": "ignored",
-                    "reason": "no_matching_rule",
+                    "status": "handled",
+                    "reason": "rule_matched",
                     "subject": "Captial and cidr.",
                     "from": "thomas.tornevall@gmail.com",
                     "to": "support@tornevall.net",
@@ -57,12 +57,12 @@
                     "dry_run": false,
                     "message_key": "cab0dji6hcz--lshhfb_noat6xbh_eqqcuzryveyra=idw6qswg@mail.gmail.com",
                     "mailbox_id": 1,
-                    "recorded_at": "2026-04-17T20:57:18+02:00"
+                    "recorded_at": "2026-04-18T09:48:27+02:00"
                 },
                 "cab0dji57cqepp_-jmaz8q2nd1u2sxevbigx4pknzzxhfjwhfqq@mail.gmail.com": {
                     "message_id": "cab0dji57cqepp_-jmaz8q2nd1u2sxevbigx4pknzzxhfjwhfqq@mail.gmail.com",
-                    "status": "ignored",
-                    "reason": "no_matching_rule",
+                    "status": "handled",
+                    "reason": "rule_matched",
                     "subject": "I have a question",
                     "from": "thomas.tornevall@gmail.com",
                     "to": "support@tornevall.net",
@@ -71,12 +71,12 @@
                     "dry_run": false,
                     "message_key": "cab0dji57cqepp_-jmaz8q2nd1u2sxevbigx4pknzzxhfjwhfqq@mail.gmail.com",
                     "mailbox_id": 1,
-                    "recorded_at": "2026-04-17T20:57:18+02:00"
+                    "recorded_at": "2026-04-18T09:48:33+02:00"
                 },
                 "cab0dji4wywmbinqkm2nsbuhdz9ep7udvtvkcdwavy4xwwrsncw@mail.gmail.com": {
                     "message_id": "cab0dji4wywmbinqkm2nsbuhdz9ep7udvtvkcdwavy4xwwrsncw@mail.gmail.com",
-                    "status": "ignored",
-                    "reason": "no_matching_rule",
+                    "status": "handled",
+                    "reason": "rule_matched",
                     "subject": "dnsbl payload?",
                     "from": "thomas.tornevall@gmail.com",
                     "to": "support@tornevall.net",
@@ -85,7 +85,7 @@
                     "dry_run": false,
                     "message_key": "cab0dji4wywmbinqkm2nsbuhdz9ep7udvtvkcdwavy4xwwrsncw@mail.gmail.com",
                     "mailbox_id": 1,
-                    "recorded_at": "2026-04-17T20:57:18+02:00"
+                    "recorded_at": "2026-04-18T09:52:23+02:00"
                 }
             }
         }

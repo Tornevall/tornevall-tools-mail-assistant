@@ -13,14 +13,20 @@ class MessageStateStore
 
     public function hasRecord(int $mailboxId, string $messageKey): bool
     {
+        return $this->getRecord($mailboxId, $messageKey) !== null;
+    }
+
+    public function getRecord(int $mailboxId, string $messageKey): ?array
+    {
         $messageKey = $this->normalizeKey($messageKey);
         if ($mailboxId < 1 || $messageKey === '') {
-            return false;
+            return null;
         }
 
         $state = $this->load();
+        $record = $state['mailboxes'][(string) $mailboxId]['messages'][$messageKey] ?? null;
 
-        return isset($state['mailboxes'][(string) $mailboxId]['messages'][$messageKey]);
+        return is_array($record) ? $record : null;
     }
 
     public function remember(int $mailboxId, string $messageKey, array $payload): void
@@ -83,8 +89,19 @@ class MessageStateStore
                 return strcmp((string) ($b['recorded_at'] ?? ''), (string) ($a['recorded_at'] ?? ''));
             });
 
+            $excludedReadRecords = 0;
+            $visibleMessages = array_values(array_filter($messages, static function (array $message) use (&$excludedReadRecords): bool {
+                $reason = strtolower(trim((string) ($message['reason'] ?? '')));
+                if ($reason === 'already_read_at_ingest') {
+                    $excludedReadRecords++;
+                    return false;
+                }
+
+                return true;
+            }));
+
             $statusCounts = [];
-            foreach ($messages as $message) {
+            foreach ($visibleMessages as $message) {
                 $status = (string) ($message['status'] ?? 'recorded');
                 if (!isset($statusCounts[$status])) {
                     $statusCounts[$status] = 0;
@@ -93,7 +110,9 @@ class MessageStateStore
             }
 
             $mailboxes[(string) $mailboxId] = [
-                'count' => count($messages),
+                'count' => count($visibleMessages),
+                'excluded_read_records' => $excludedReadRecords,
+                'raw_count' => count($messages),
                 'status_counts' => $statusCounts,
                 'recent' => array_slice(array_map(static function (array $message): array {
                     return [
@@ -104,9 +123,9 @@ class MessageStateStore
                         'subject' => (string) ($message['subject'] ?? ''),
                         'recorded_at' => (string) ($message['recorded_at'] ?? ''),
                     ];
-                }, $messages), 0, 10),
+                }, $visibleMessages), 0, 10),
             ];
-            $total += count($messages);
+            $total += count($visibleMessages);
         }
 
         return [

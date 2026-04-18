@@ -6,7 +6,7 @@ This project is intentionally small and can stay **databaseless**:
 
 - mailbox + rule configuration lives in Tools admin
 - the client fetches config from `GET /api/mail-support-assistant/config`
-- local state is limited to session data, logs, the last run summary, and persisted handled/ignored message IDs in `storage/`
+- local state is limited to session data, logs, the last run summary, and a local message-history file in `storage/`
 
 The project is **not** a Laravel app and must stay runnable as plain PHP.
 
@@ -18,7 +18,7 @@ The project is **not** a Laravel app and must stay runnable as plain PHP.
 - `src/` - Tools API client, IMAP adapter, MIME decoding, runner, and local auth
 - `templates/` - minimal login/dashboard templates
 - `storage/` - logs, last-run summary, and persisted local state
-- `storage/state/message-state.json` - normalized handled/ignored `Message-Id` history per mailbox
+- `storage/state/message-state.json` - normalized local message history per mailbox for diagnostics
 
 ## Requirements
 
@@ -37,8 +37,13 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
    - `MAIL_ASSISTANT_WEB_USER`
    - `MAIL_ASSISTANT_WEB_PASSWORD`
    - `MAIL_ASSISTANT_TOOLS_TOKEN`
+   - optional dedicated relay token: `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`
    - optional: `MAIL_ASSISTANT_SPAMASSASSIN_SKIP_SCORE` and `MAIL_ASSISTANT_SPAMASSASSIN_COPY_SCORE`
    - optional AI tuning: `MAIL_ASSISTANT_AI_MODEL`, `MAIL_ASSISTANT_AI_FALLBACK_MODEL`, `MAIL_ASSISTANT_AI_REASONING_EFFORT`
+   - optional mail transport tuning:
+     - `MAIL_ASSISTANT_MAIL_TRANSPORT` (`php_mail` | `custom_mta` | `tools_api`)
+     - `MAIL_ASSISTANT_MTA_COMMAND` (used when transport is `custom_mta`)
+     - `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API` (`true|false`)
    - optional no-match fallback gate: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1` (kept off by default unless enabled in Tools config or env)
 3. In Tools admin, open `/admin/mail-support-assistant`
 4. Create mailbox/rule config
@@ -48,7 +53,8 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
 ### Where mailbox credentials are stored
 
 - IMAP host/user/password data is stored in the main Tools admin database, not in this standalone project's own database.
-- This standalone client stays databaseless locally; it only keeps `.env`, session state, logs, saved dry-run/last-run summaries, local handled/ignored `Message-Id` state, and optional local message copies in `storage/`.
+- This standalone client stays databaseless locally; it only keeps `.env`, session state, logs, saved dry-run/last-run summaries, local message-history state, and optional local message copies in `storage/`.
+- Because mailbox/rule config is fetched directly from Tools by bearer token, you usually do **not** need to expose the mini PHP web UI publicly at all. In many setups the CLI runner alone is enough.
 
 ## CLI usage
 
@@ -79,7 +85,7 @@ Current UI features:
 - AJAX-triggered safe dry-run action (reuses the same PHP runner as CLI)
 - config preview fetched live from Tools
 - last-run summary preview from `storage/last-run.json`
-- local handled/ignored `Message-Id` summary preview from `storage/state/message-state.json`
+- local message-history preview from `storage/state/message-state.json`
 - direct link back to Tools admin
 - recent local log tail
 
@@ -120,13 +126,21 @@ Rules can decide per message whether AI is enabled.
 ## Notes
 
 - Unmatched mail is left untouched.
-- Cron/manual execution still only polls unread mail, but any message that gets handled or explicitly ignored is also persisted locally by normalized `Message-Id` (with a fallback key when the header is missing) so leftover unread mail is not processed twice.
+- Cron/manual execution only polls unread mail. Already-read mail is skipped immediately.
+- Unread mail may be reprocessed on later runs even if the same `Message-Id` already exists in local history; the local state file is now diagnostic history only and is no longer used as a dedupe gate.
 - Matchers currently support `from`, `to`, `subject`, and optional body text contains checks.
 - Subject matching is now reply-aware (`Re:`, `Fwd:`, `Sv:` prefixes are stripped before rule checks), and outgoing replies now preserve `In-Reply-To` / `References` headers so answers stay in the same thread.
 - Unmatched mail is now also logged more explicitly with mailbox/from/to/subject details, which makes `scanned` + `skipped` runs easier to diagnose.
 - No-match handling now records clearer state reasons such as `no_matching_rule_generic_ai_disabled`, `no_matching_rule_generic_ai_unanswerable`, `no_matching_rule_generic_ai_error`, and `no_matching_rule_generic_ai_replied`.
+- Run summaries now separate `messages_read_skipped` from other skipped categories, so mail that is already marked read at ingest is tracked clearly and does not need to be interpreted as `no_matching_rule` noise.
+- Run summaries also expose `messages_previously_recorded_unread` so operators can see when an unread thread was present in local history but was deliberately re-evaluated anyway.
 - The runner now parses SpamAssassin headers so heavily flagged messages can be skipped before handling, while wrapper-style SpamAssassin rewrites can still be copied locally and stripped from the body before rule matching/AI.
 - Local SpamAssassin/debug copies are written under `storage/cache/message-copies/` when the runner detects a rewritten wrapper or another message worth preserving for review.
-- The mini dashboard now shows both the last run summary and the local `Message-Id` state so operators can see which mailbox records were already handled or ignored.
-- Reply sending uses PHP `mail()` for the first scaffold. If you later want SMTP or a dedicated mail transport, extend `MailAssistantRunner::sendReply()`.
+- The mini dashboard now shows both the last run summary and the local message-history file so operators can see prior outcomes without that history blocking unread reruns.
+- Reply sending now supports multiple transports:
+  - `php_mail` (default, uses local PHP `mail()`)
+  - `custom_mta` (pipes RFC822 message to `MAIL_ASSISTANT_MTA_COMMAND`)
+  - `tools_api` (relays via `POST /api/mail-support-assistant/send-reply`)
+- If local transport fails and `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`, the runner automatically retries through the Tools relay endpoint.
+- Tools relay requires a dedicated personal token (`provider_mail_support_assistant_mailer`) and the `mail-support-assistant.relay` permission for the token owner (admin bypass still applies).
 

@@ -1,5 +1,26 @@
 # CHANGELOG
 
+## 0.3.3 - 2026-04-18
+
+- Fixed `Array to string conversion` warnings in `ToolsApiClient` error handling by normalizing array-style API messages into readable strings.
+- Added env-driven outgoing mail transport selection in the runner: `php_mail`, `custom_mta`, and `tools_api`.
+- Added optional custom MTA command support via `MAIL_ASSISTANT_MTA_COMMAND` when `MAIL_ASSISTANT_MAIL_TRANSPORT=custom_mta`.
+- Added optional fallback from local transport failures to Tools mail relay via `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`.
+- Added dedicated relay token env support (`MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`) for `POST /api/mail-support-assistant/send-reply`.
+
+## 0.3.2 - 2026-04-18
+
+- Local `message-state.json` is now diagnostic history only and no longer blocks unread mail from being re-evaluated on later runs.
+- Already-read IMAP mail is still skipped immediately, but unread messages that were previously handled or ignored can now match newly added rules without clearing local state first.
+- Runner summaries now expose `messages_previously_recorded_unread` / mailbox `previously_recorded_unread` so operators can see when an unread message was found in local history and intentionally re-checked.
+- README and mini dashboard wording now make it explicit that the standalone web UI is optional and that the local message-history file is non-blocking.
+
+## 0.3.1 - 2026-04-18
+
+- Added explicit `messages_read_skipped` / `read_skipped` counters in runner summaries so already-read mail is visible as its own category instead of blending with no-match skips.
+- IMAP message payloads now include an `is_seen` flag, and the runner now skips messages that are already marked read at ingest without recording them as `no_matching_rule` ignored events.
+- Local message-state summaries now expose `excluded_read_records` and `raw_count` metadata, while default `recent` output hides records marked with reason `already_read_at_ingest`.
+
 ## 0.3.0 - 2026-04-17
 
 - Added a config-gated generic AI fallback path for `no_matching_rule` emails, so unmatched support mail can still get a helpful reply when enabled instead of always being ignored.

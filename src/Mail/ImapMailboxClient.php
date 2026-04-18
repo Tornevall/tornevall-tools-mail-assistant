@@ -143,6 +143,7 @@ class ImapMailboxClient
         return [
             'uid' => $uid,
             'message_no' => $messageNo,
+            'is_seen' => !empty($overview->seen),
             'message_id' => $messageId,
             'message_key' => $messageId !== '' ? $messageId : strtolower(sha1(implode('|', [
                 $uid,

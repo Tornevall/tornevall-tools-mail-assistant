@@ -1,4 +1,4 @@
-ro<?php
+<?php
 
 namespace MailSupportAssistant\Web;
 

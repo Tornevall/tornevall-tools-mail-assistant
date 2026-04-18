@@ -740,53 +740,115 @@ class MailAssistantRunner
             return;
         }
 
-        $transport = strtolower(trim((string) Env::get('MAIL_ASSISTANT_MAIL_TRANSPORT', 'smtp')));
-        if (!in_array($transport, ['smtp', 'pickup', 'php_mail', 'custom_mta', 'tools_api'], true)) {
-            $transport = 'smtp';
+        $transportPlan = $this->buildMailTransportPlan();
+        $attemptErrors = [];
+
+        foreach ($transportPlan as $attemptIndex => $transport) {
+            if ($transport === 'tools_api' && !$this->tools->hasMailToken()) {
+                $this->logger->warning('Skipping Tools relay transport because MAIL_ASSISTANT_TOOLS_MAIL_TOKEN is not configured.', [
+                    'to' => $to,
+                    'subject' => $subject,
+                    'attempt' => $attemptIndex + 1,
+                    'transport' => $transport,
+                ]);
+                continue;
+            }
+
+            try {
+                $this->deliverReplyViaTransport($transport, $mailbox, $rule, $message, $to, $subject, $body, $headers, $attemptIndex === 0);
+                return;
+            } catch (Throwable $transportError) {
+                $attemptErrors[] = $transport . ': ' . $transportError->getMessage();
+                $this->logger->warning('Mail transport attempt failed.', [
+                    'to' => $to,
+                    'subject' => $subject,
+                    'attempt' => $attemptIndex + 1,
+                    'transport' => $transport,
+                    'error' => $transportError->getMessage(),
+                ]);
+            }
         }
 
-        $fallbackToTools = Env::bool('MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API', true);
+        throw new RuntimeException(
+            'All configured mail transports failed. ' . implode(' | ', array_values(array_unique($attemptErrors)))
+        );
+    }
 
-        try {
-            if ($transport === 'tools_api') {
-                $this->sendReplyViaToolsRelay($mailbox, $rule, $message, $to, $subject, $body, $headers, 'tools_api_primary');
-                return;
-            }
-
-            if ($transport === 'smtp') {
-                $this->sendReplyViaSmtp($to, $subject, $body, $headers);
-                $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'smtp']);
-                return;
-            }
-
-            if ($transport === 'pickup') {
-                $this->sendReplyViaPickup($to, $subject, $body, $headers);
-                $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'pickup']);
-                return;
-            }
-
-            if ($transport === 'custom_mta') {
-                $this->sendReplyViaCustomMta($to, $subject, $body, $headers);
-                $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'custom_mta']);
-                return;
-            }
-
-            $this->sendReplyViaPhpMail($to, $subject, $body, $headers);
-            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'php_mail']);
-        } catch (Throwable $primaryError) {
-            if (!$fallbackToTools) {
-                throw $primaryError;
-            }
-
-            $this->logger->warning('Primary mail transport failed, trying Tools relay fallback.', [
-                'to' => $to,
-                'subject' => $subject,
-                'transport' => $transport,
-                'error' => $primaryError->getMessage(),
-            ]);
-
-            $this->sendReplyViaToolsRelay($mailbox, $rule, $message, $to, $subject, $body, $headers, 'fallback_after_' . $transport);
+    private function buildMailTransportPlan(): array
+    {
+        $allowed = ['smtp', 'pickup', 'php_mail', 'custom_mta', 'tools_api'];
+        $primary = strtolower(trim((string) Env::get('MAIL_ASSISTANT_MAIL_TRANSPORT', 'smtp')));
+        if (!in_array($primary, $allowed, true)) {
+            $primary = 'smtp';
         }
+
+        $plan = [$primary];
+
+        $configuredFallbacks = trim((string) Env::get('MAIL_ASSISTANT_MAIL_FALLBACK_TRANSPORTS', ''));
+        if ($configuredFallbacks !== '') {
+            foreach (preg_split('/\s*,\s*/', $configuredFallbacks) ?: [] as $transport) {
+                $transport = strtolower(trim((string) $transport));
+                if ($transport !== '' && in_array($transport, $allowed, true)) {
+                    $plan[] = $transport;
+                }
+            }
+        } else {
+            if ($primary === 'tools_api') {
+                $plan = array_merge($plan, ['smtp', 'pickup', 'php_mail', 'custom_mta']);
+            }
+
+            if (Env::bool('MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API', true)) {
+                $plan[] = 'tools_api';
+            }
+        }
+
+        $normalized = [];
+        foreach ($plan as $transport) {
+            if (!in_array($transport, $allowed, true) || in_array($transport, $normalized, true)) {
+                continue;
+            }
+            $normalized[] = $transport;
+        }
+
+        return count($normalized) ? $normalized : ['smtp'];
+    }
+
+    private function deliverReplyViaTransport(string $transport, array $mailbox, array $rule, array $message, string $to, string $subject, string $body, array $headers, bool $isPrimary): void
+    {
+        if ($transport === 'tools_api') {
+            $this->sendReplyViaToolsRelay(
+                $mailbox,
+                $rule,
+                $message,
+                $to,
+                $subject,
+                $body,
+                $headers,
+                $isPrimary ? 'tools_api_primary' : 'fallback_after_transport_failure'
+            );
+            return;
+        }
+
+        if ($transport === 'smtp') {
+            $this->sendReplyViaSmtp($to, $subject, $body, $headers);
+            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'smtp']);
+            return;
+        }
+
+        if ($transport === 'pickup') {
+            $this->sendReplyViaPickup($to, $subject, $body, $headers);
+            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'pickup']);
+            return;
+        }
+
+        if ($transport === 'custom_mta') {
+            $this->sendReplyViaCustomMta($to, $subject, $body, $headers);
+            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'custom_mta']);
+            return;
+        }
+
+        $this->sendReplyViaPhpMail($to, $subject, $body, $headers);
+        $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'php_mail']);
     }
 
     private function sendReplyViaPhpMail(string $to, string $subject, string $body, array $headers): void

@@ -5,4 +5,4 @@
 !/storage/logs/.gitignore
 !/storage/cache/.gitignore
 /vendor/
-storage/state/*.json
+**.json

@@ -907,10 +907,10 @@ class MailAssistantRunner
     {
         $host = trim((string) Env::get('MAIL_ASSISTANT_SMTP_HOST', ''));
         $port = (int) Env::get('MAIL_ASSISTANT_SMTP_PORT', '587');
-        $security = strtolower(trim((string) Env::get('MAIL_ASSISTANT_SMTP_SECURITY', 'tls')));
+        $security = strtolower(trim((string) Env::get('MAIL_ASSISTANT_SMTP_SECURITY', '')));
         $username = trim((string) Env::get('MAIL_ASSISTANT_SMTP_USERNAME', ''));
         $password = (string) Env::get('MAIL_ASSISTANT_SMTP_PASSWORD', '');
-        $ehlo = trim((string) Env::get('MAIL_ASSISTANT_SMTP_EHLO', 'localhost'));
+        $ehlo = trim((string) Env::get('MAIL_ASSISTANT_SMTP_EHLO', ''));
         $timeout = max(5, (int) Env::get('MAIL_ASSISTANT_SMTP_TIMEOUT', '20'));
 
         if ($host === '') {
@@ -919,8 +919,17 @@ class MailAssistantRunner
         if ($port < 1 || $port > 65535) {
             throw new RuntimeException('MAIL_ASSISTANT_SMTP_PORT is invalid.');
         }
+        if ($security === '') {
+            $security = 'tls';
+        }
         if (!in_array($security, ['tls', 'ssl', 'none'], true)) {
             throw new RuntimeException('MAIL_ASSISTANT_SMTP_SECURITY must be tls, ssl, or none.');
+        }
+        if ($ehlo === '') {
+            $ehlo = php_uname('n');
+        }
+        if ($ehlo === '') {
+            $ehlo = 'localhost';
         }
 
         $fromHeader = $this->extractHeaderValue($headers, 'From');
@@ -929,7 +938,10 @@ class MailAssistantRunner
             throw new RuntimeException('Could not resolve sender email from From header for SMTP delivery.');
         }
 
-        $envelopeFrom = trim((string) Env::get('MAIL_ASSISTANT_SMTP_FROM_ENVELOPE', $fromEmail));
+        $envelopeFrom = trim((string) Env::get('MAIL_ASSISTANT_SMTP_FROM_ENVELOPE', ''));
+        if ($envelopeFrom === '') {
+            $envelopeFrom = $fromEmail;
+        }
         if (!filter_var($envelopeFrom, FILTER_VALIDATE_EMAIL)) {
             throw new RuntimeException('MAIL_ASSISTANT_SMTP_FROM_ENVELOPE is invalid.');
         }

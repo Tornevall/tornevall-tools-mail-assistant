@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.10 - 2026-04-18
+
+- SMTP delivery now treats blank `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, and `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE` as optional overrides instead of invalid configuration.
+- Empty `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE` now falls back to the reply `From:` address automatically, which makes ordinary host/port/user/pass SMTP setups work without extra envelope configuration.
+
 ## 0.3.9 - 2026-04-18
 
 - Outgoing mail transport now supports an explicit ordered fallback chain through `MAIL_ASSISTANT_MAIL_FALLBACK_TRANSPORTS`.

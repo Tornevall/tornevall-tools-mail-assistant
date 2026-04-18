@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.14 - 2026-04-18
+
+- AI requests from matched rules now retry rate-limited `429 / Too Many Attempts` failures before the standalone runner gives up and abandons the AI path.
+- AI-enabled rules without an explicit `template_text` fallback no longer send the misleading hardcoded sentence `Thank you for your message. We have reviewed it.` when AI fails; the reply is now aborted and logged instead.
+- Per-message failures now stay isolated inside the mailbox run, so one failed AI-generated reply does not abort all later messages in the same mailbox pass.
+
 ## 0.3.13 - 2026-04-18
 
 - Outgoing replies are now emitted as `multipart/alternative` across standalone transports, with a plain-text fallback plus a styled HTML version for better-looking support mail.

@@ -7,7 +7,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-    private const CLIENT_VERSION = '0.3.13';
+    private const CLIENT_VERSION = '0.3.14';
 
     private string $baseUrl;
     private string $token;
@@ -159,7 +159,7 @@ class ToolsApiClient
         }
 
         try {
-            return $this->request('POST', '/ai/socialgpt/respond', $payload);
+            return $this->performAiRequestWithRetry($payload);
         } catch (RuntimeException $primaryFailure) {
             if ($fallbackModel === '' || strcasecmp($fallbackModel, $primaryModel) === 0) {
                 throw $primaryFailure;
@@ -167,7 +167,7 @@ class ToolsApiClient
 
             $fallbackPayload = $payload;
             $fallbackPayload['model'] = $fallbackModel;
-            $fallbackResult = $this->request('POST', '/ai/socialgpt/respond', $fallbackPayload);
+            $fallbackResult = $this->performAiRequestWithRetry($fallbackPayload);
             if (!array_key_exists('used_fallback_model', $fallbackResult)) {
                 $fallbackResult['used_fallback_model'] = true;
             }
@@ -175,6 +175,61 @@ class ToolsApiClient
 
             return $fallbackResult;
         }
+    }
+
+    private function performAiRequestWithRetry(array $payload): array
+    {
+        $maxAttempts = max(1, (int) Env::get('MAIL_ASSISTANT_AI_RETRY_ATTEMPTS', '3'));
+        $baseDelayMs = max(0, (int) Env::get('MAIL_ASSISTANT_AI_RETRY_DELAY_MS', '2000'));
+        $attempt = 0;
+        $lastException = null;
+
+        while ($attempt < $maxAttempts) {
+            $attempt++;
+
+            try {
+                return $this->request('POST', '/ai/socialgpt/respond', $payload);
+            } catch (RuntimeException $e) {
+                $lastException = $e;
+                if (!$this->shouldRetryAiException($e) || $attempt >= $maxAttempts) {
+                    throw $e;
+                }
+
+                $delayMs = $this->resolveAiRetryDelayMs($attempt, $baseDelayMs);
+                if ($delayMs > 0) {
+                    usleep($delayMs * 1000);
+                }
+            }
+        }
+
+        throw $lastException ?: new RuntimeException('AI request failed after retries.');
+    }
+
+    private function shouldRetryAiException(RuntimeException $e): bool
+    {
+        $message = strtolower(trim($e->getMessage()));
+        if ($message === '') {
+            return false;
+        }
+
+        return preg_match('/(^|\D)429(\D|$)/', $message) === 1
+            || strpos($message, 'too many attempts') !== false
+            || strpos($message, 'rate limit') !== false
+            || strpos($message, 'retry after') !== false;
+    }
+
+    private function resolveAiRetryDelayMs(int $attempt, int $baseDelayMs): int
+    {
+        if ($baseDelayMs <= 0) {
+            return 0;
+        }
+
+        $multiplier = 1;
+        if ($attempt > 1) {
+            $multiplier = 1 << ($attempt - 1);
+        }
+
+        return min(30000, $baseDelayMs * $multiplier);
     }
 
     private function sanitizeSummaryText(string $text, int $maxLength = 2400): string

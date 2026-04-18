@@ -67,6 +67,8 @@ It is expected to:
 - Dry-run must never send replies or mutate mailboxes.
 - No-match mails must stay untouched.
 - The same personal token is used both to fetch config and, when enabled, to call Tools-hosted AI.
+- For matched rules with `ai_enabled=true`, the standalone client must treat the rule's responder/persona/custom instruction/model/reasoning values as authoritative AI override inputs for that single Tools AI request.
+- Mailbox-level `generic_no_match_*` AI settings are only for the unmatched-mail fallback path and must not replace matched rule AI overrides.
 - Outgoing replies now support `smtp` (default), `php_mail`, `custom_mta`, and `tools_api` transports (
   `MAIL_ASSISTANT_MAIL_TRANSPORT`).
 - SMTP runtime keys are `MAIL_ASSISTANT_SMTP_HOST`, `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_SECURITY`,
@@ -76,6 +78,7 @@ It is expected to:
   `POST /api/mail-support-assistant/send-reply` using `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`.
 - Tools relay tokens are expected to be dedicated personal keys (provider `provider_mail_support_assistant_mailer`) and
   should be permission-gated server-side (`mail-support-assistant.relay`).
+- Mailbox config may now also expose `generic_no_match_ai_reasoning_effort`, and matched rules may now expose `ai_reasoning_effort`.
 
 ## Validation checklist
 

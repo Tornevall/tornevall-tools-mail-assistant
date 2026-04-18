@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.12 - 2026-04-18
+
+- AI-enabled matched rules now forward `responder_name`, `persona_profile`, `custom_instruction`, `ai_model`, and `ai_reasoning_effort` to Tools as explicit one-request overrides instead of only looking like generic/static replies.
+- Mailbox-level unmatched-mail AI config can now also carry `generic_no_match_ai_reasoning_effort` from Tools config.
+
 ## 0.3.11 - 2026-04-18
 
 - Messages skipped because no rule matches, or because the generic no-match fallback is disabled/unanswerable/failing, now stay unread instead of being marked seen.

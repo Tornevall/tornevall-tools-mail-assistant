@@ -7,7 +7,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-    private const CLIENT_VERSION = '0.3.0';
+    private const CLIENT_VERSION = '0.3.12';
 
     private string $baseUrl;
     private string $token;
@@ -51,9 +51,10 @@ class ToolsApiClient
 
     public function generateAiReply(array $mailbox, array $rule, array $message): array
     {
-        $primaryModel = trim((string) (($rule['reply']['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
+        $reply = (array) ($rule['reply'] ?? []);
+        $primaryModel = trim((string) (($reply['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
         $fallbackModel = trim((string) Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'gpt-4o-mini'));
-        $reasoningEffort = $this->normalizeReasoningEffort(($rule['reply']['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
+        $reasoningEffort = $this->normalizeReasoningEffort(($reply['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
         $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
         $cleanBody = $this->sanitizeSummaryText((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 2400);
 
@@ -74,11 +75,11 @@ class ToolsApiClient
             $cleanBody,
         ];
 
-        $customInstruction = trim((string) (($rule['reply']['custom_instruction'] ?? null) ?: ''));
+        $customInstruction = trim((string) (($reply['custom_instruction'] ?? null) ?: ''));
+        $responderName = trim((string) (($reply['responder_name'] ?? null) ?: ''));
+        $personaProfile = trim((string) (($reply['persona_profile'] ?? null) ?: ''));
+        $mood = trim((string) (($reply['mood'] ?? null) ?: ''));
         $userPrompt = 'Reply helpfully to this support email.';
-        if ($customInstruction !== '') {
-            $userPrompt .= ' ' . $customInstruction;
-        }
 
         $payload = [
             'context' => trim(implode("\n", $contextLines)),
@@ -90,6 +91,19 @@ class ToolsApiClient
             'client_version' => self::CLIENT_VERSION,
             'client_platform' => 'php_standalone',
         ];
+        if ($responderName !== '') {
+            $payload['responder_name_override'] = $responderName;
+        }
+        if ($personaProfile !== '') {
+            $payload['persona_profile_override'] = $personaProfile;
+        }
+        if ($customInstruction !== '') {
+            $payload['custom_instruction_override'] = $customInstruction;
+        }
+        if ($mood !== '') {
+            $payload['mood'] = $mood;
+        }
+
         return $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
     }
 
@@ -103,9 +117,6 @@ class ToolsApiClient
         $cleanBody = $this->sanitizeSummaryText((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 2600);
         $assistantHint = trim((string) ($options['custom_instruction'] ?? ''));
         $userPrompt = 'A support email did not match any explicit mailbox rule. Reply briefly and helpfully only if the request seems answerable from the provided context. If key details are missing, ask a concise follow-up question.';
-        if ($assistantHint !== '') {
-            $userPrompt .= ' ' . $assistantHint;
-        }
 
         $contextLines = [
             'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
@@ -134,6 +145,9 @@ class ToolsApiClient
             'client_version' => self::CLIENT_VERSION,
             'client_platform' => 'php_standalone',
         ];
+        if ($assistantHint !== '') {
+            $payload['custom_instruction_override'] = $assistantHint;
+        }
 
         return $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
     }

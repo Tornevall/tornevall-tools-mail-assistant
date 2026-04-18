@@ -109,7 +109,8 @@ php run --limit=10 >> storage/logs/cron.log 2>&1
 Rules can decide per message whether AI is enabled.
 
 - If a rule has `ai_enabled=false`, the client uses the static template text only.
-- If a rule has `ai_enabled=true`, the client calls Tools' `POST /api/ai/socialgpt/respond` with the same personal token.
+- If a rule has `ai_enabled=true`, the client calls Tools' `POST /api/ai/socialgpt/respond` with the same personal token and forwards that rule's responder/persona/custom instruction/model/reasoning as explicit one-request overrides.
+- For AI-enabled matched rules, the static template is now only a fallback if the AI call fails or returns an empty/non-usable response.
 - AI requests now default to a primary model (`gpt-5.4`) and retry once with a fallback model (`gpt-4o-mini`) if the primary call fails.
 - The same reasoning-effort setting is forwarded on both primary and fallback requests (`MAIL_ASSISTANT_AI_REASONING_EFFORT`, default `medium`).
 - Message bodies are sanitized (HTML/MIME noise stripped) before being sent as AI request summary context.
@@ -124,6 +125,7 @@ Rules can decide per message whether AI is enabled.
   - top-level/settings/features variants from Tools config (`generic_no_match_ai_enabled` / `generic_reply_on_no_match`)
   - env fallback: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1`
 - Generic fallback replies are only sent when the AI response looks usable (non-empty, not just a refusal/insufficient-context line).
+- Mailbox-level unmatched-mail fallback can now also carry its own `generic_no_match_ai_reasoning_effort` override from Tools config; Tools still decides per selected model whether reasoning is actually forwarded.
 - If the fallback path is disabled, fails, or returns an unanswerable response, the message remains ignored.
 
 ## Notes

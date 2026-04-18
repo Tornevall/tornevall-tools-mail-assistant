@@ -213,11 +213,16 @@ class MailAssistantRunner
                             continue;
                         }
 
-                        $rule = $this->matchRule($message, (array) ($mailbox['rules'] ?? []));
-                        if (!$rule) {
+                            $ruleMatches = $this->findMatchingRules($message, (array) ($mailbox['rules'] ?? []));
+                            $selectedRuleMatch = $this->selectBestRuleMatch($ruleMatches);
+                            if (!$selectedRuleMatch) {
                             $genericNoMatch = $this->tryHandleGenericNoMatch($imap, $config, $mailbox, $message, $dryRun);
                             if (!empty($genericNoMatch['handled'])) {
-                                $this->recordMessageState($mailboxSummary, $message, 'handled', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule_generic_ai_replied'), $dryRun);
+                                    $this->recordMessageState($mailboxSummary, $message, 'handled', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule_generic_ai_replied'), $dryRun, [
+                                        'matching_rule_count' => 0,
+                                        'matching_rules' => [],
+                                        'selected_rule' => null,
+                                    ]);
                                 $mailboxSummary['handled']++;
                                 $summary['messages_handled']++;
                                 continue;
@@ -225,7 +230,11 @@ class MailAssistantRunner
 
                             $mailboxSummary['skipped']++;
                             $summary['messages_skipped']++;
-                            $this->recordMessageState($mailboxSummary, $message, 'ignored', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule'), $dryRun);
+                                $this->recordMessageState($mailboxSummary, $message, 'ignored', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule'), $dryRun, [
+                                    'matching_rule_count' => 0,
+                                    'matching_rules' => [],
+                                    'selected_rule' => null,
+                                ]);
                             $this->logger->info('Message skipped because no configured rule matched.', [
                                 'mailbox' => $mailbox['name'] ?? null,
                                 'uid' => $message['uid'] ?? null,
@@ -242,8 +251,35 @@ class MailAssistantRunner
                             continue;
                         }
 
-                        $this->handleMessage($imap, $mailbox, $rule, $message, $dryRun);
-                        $this->recordMessageState($mailboxSummary, $message, 'handled', 'rule_matched_replied', $dryRun);
+                            $selectedRule = (array) ($selectedRuleMatch['rule'] ?? []);
+                            $selectedRuleSummary = $this->buildRuleMatchSummary($selectedRuleMatch);
+                            $matchingRuleSummaries = array_map(function (array $match): array {
+                                return $this->buildRuleMatchSummary($match);
+                            }, $ruleMatches);
+
+                            if (count($ruleMatches) > 1) {
+                                $this->logger->warning('Multiple rules matched the same message; selected the most specific rule.', [
+                                    'mailbox' => $mailbox['name'] ?? null,
+                                    'uid' => $message['uid'] ?? null,
+                                    'message_id' => $message['message_id'] ?? null,
+                                    'selected_rule' => $selectedRuleSummary,
+                                    'matching_rules' => $matchingRuleSummaries,
+                                ]);
+                            } else {
+                                $this->logger->info('Message matched a rule.', [
+                                    'mailbox' => $mailbox['name'] ?? null,
+                                    'uid' => $message['uid'] ?? null,
+                                    'message_id' => $message['message_id'] ?? null,
+                                    'selected_rule' => $selectedRuleSummary,
+                                ]);
+                            }
+
+                            $this->handleMessage($imap, $mailbox, $selectedRule, $message, $dryRun);
+                            $this->recordMessageState($mailboxSummary, $message, 'handled', 'rule_matched_replied', $dryRun, [
+                                'matching_rule_count' => count($matchingRuleSummaries),
+                                'matching_rules' => $matchingRuleSummaries,
+                                'selected_rule' => $selectedRuleSummary,
+                            ]);
                         $mailboxSummary['handled']++;
                         $summary['messages_handled']++;
                     } catch (Throwable $messageError) {
@@ -303,31 +339,103 @@ class MailAssistantRunner
         return $summary;
     }
 
-    private function matchRule(array $message, array $rules): ?array
+    private function findMatchingRules(array $message, array $rules): array
     {
-        $from = (string) ($message['from'] ?? '');
-        $to = (string) ($message['to'] ?? '');
-        $subject = (string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? ''));
-        $body = (string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? ''));
+        $messageFields = [
+            'from_contains' => (string) ($message['from'] ?? ''),
+            'to_contains' => (string) ($message['to'] ?? ''),
+            'subject_contains' => (string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? '')),
+            'body_contains' => (string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')),
+        ];
+        $matches = [];
 
         foreach ($rules as $rule) {
-            if (!$this->containsMatch($from, (string) (($rule['match']['from_contains'] ?? null) ?: ''))) {
-                continue;
+            $match = $this->evaluateRuleMatch($messageFields, (array) $rule);
+            if (!empty($match['matched'])) {
+                $matches[] = $match;
             }
-            if (!$this->containsMatch($to, (string) (($rule['match']['to_contains'] ?? null) ?: ''))) {
-                continue;
-            }
-            if (!$this->containsMatch($subject, (string) (($rule['match']['subject_contains'] ?? null) ?: ''))) {
-                continue;
-            }
-            if (!$this->containsMatch($body, (string) (($rule['match']['body_contains'] ?? null) ?: ''))) {
-                continue;
-            }
-
-            return $rule;
         }
 
-        return null;
+        usort($matches, function (array $left, array $right): int {
+            $criteriaDiff = ((int) ($right['active_criteria_count'] ?? 0)) <=> ((int) ($left['active_criteria_count'] ?? 0));
+            if ($criteriaDiff !== 0) {
+                return $criteriaDiff;
+            }
+
+            $lengthDiff = ((int) ($right['specificity_length'] ?? 0)) <=> ((int) ($left['specificity_length'] ?? 0));
+            if ($lengthDiff !== 0) {
+                return $lengthDiff;
+            }
+
+            $sortDiff = ((int) (($left['rule']['sort_order'] ?? 0))) <=> ((int) (($right['rule']['sort_order'] ?? 0)));
+            if ($sortDiff !== 0) {
+                return $sortDiff;
+            }
+
+            return ((int) (($left['rule']['id'] ?? 0))) <=> ((int) (($right['rule']['id'] ?? 0)));
+        });
+
+        return $matches;
+    }
+
+    private function selectBestRuleMatch(array $matches): ?array
+    {
+        return $matches[0] ?? null;
+    }
+
+    private function evaluateRuleMatch(array $messageFields, array $rule): array
+    {
+        $configuredFields = [
+            'from_contains' => (string) (($rule['match']['from_contains'] ?? null) ?: ''),
+            'to_contains' => (string) (($rule['match']['to_contains'] ?? null) ?: ''),
+            'subject_contains' => (string) (($rule['match']['subject_contains'] ?? null) ?: ''),
+            'body_contains' => (string) (($rule['match']['body_contains'] ?? null) ?: ''),
+        ];
+
+        $matchedFields = [];
+        $criteriaCount = 0;
+        $specificityLength = 0;
+
+        foreach ($configuredFields as $field => $needle) {
+            $needle = trim($needle);
+            if ($needle === '') {
+                continue;
+            }
+
+            $criteriaCount++;
+            $specificityLength += function_exists('mb_strlen') ? (int) mb_strlen($needle, 'UTF-8') : strlen($needle);
+            $haystack = (string) ($messageFields[$field] ?? '');
+            if (!$this->containsMatch($haystack, $needle)) {
+                return [
+                    'matched' => false,
+                    'rule' => $rule,
+                ];
+            }
+
+            $matchedFields[$field] = $needle;
+        }
+
+        return [
+            'matched' => true,
+            'rule' => $rule,
+            'matched_fields' => $matchedFields,
+            'active_criteria_count' => $criteriaCount,
+            'specificity_length' => $specificityLength,
+        ];
+    }
+
+    private function buildRuleMatchSummary(array $match): array
+    {
+        $rule = (array) ($match['rule'] ?? []);
+
+        return [
+            'id' => (int) ($rule['id'] ?? 0),
+            'name' => (string) ($rule['name'] ?? ''),
+            'sort_order' => (int) ($rule['sort_order'] ?? 0),
+            'active_criteria_count' => (int) ($match['active_criteria_count'] ?? 0),
+            'specificity_length' => (int) ($match['specificity_length'] ?? 0),
+            'matched_fields' => (array) ($match['matched_fields'] ?? []),
+        ];
     }
 
     private function containsMatch(string $haystack, string $needle): bool
@@ -720,7 +828,7 @@ class MailAssistantRunner
         return '';
     }
 
-    private function recordMessageState(array &$mailboxSummary, array $message, string $status, string $reason, bool $dryRun): void
+    private function recordMessageState(array &$mailboxSummary, array $message, string $status, string $reason, bool $dryRun, array $extra = []): void
     {
         $messageKey = $this->resolveMessageKey($message);
         if ($messageKey === '') {
@@ -739,6 +847,9 @@ class MailAssistantRunner
             'uid' => (int) ($message['uid'] ?? 0),
             'dry_run' => $dryRun,
         ];
+        foreach ($extra as $key => $value) {
+            $record[(string) $key] = $value;
+        }
 
         if (!$dryRun) {
             $this->messageState->remember($mailboxId, $messageKey, $record);

@@ -52,6 +52,9 @@ It is expected to:
   styled HTML body so ordinary mail clients see a formatted support reply instead of raw plain text.
 - No-match skips should be logged explicitly with mailbox/from/to/subject metadata so operators can diagnose `scanned` +
   `skipped` runs without reverse-engineering IMAP content.
+- Rule collisions are now first-class diagnostics too: the runner should evaluate all matching rules, choose the most
+  specific winner deterministically, and record both the winning rule and the competing matches so operators can see why
+  one rule won over another.
 - No-match handling can now be config-gated to try one generic AI fallback reply (`generic_no_match_ai_enabled`) before
   ignoring; if fallback is disabled, unanswerable, or fails, the message remains ignored with a specific reason code.
 - Generic no-match outcome reasons should stay explicit in state/logs: `no_matching_rule_generic_ai_disabled`,

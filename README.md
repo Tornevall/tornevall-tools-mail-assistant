@@ -108,6 +108,10 @@ php run --limit=10 >> storage/logs/cron.log 2>&1
 
 Rules can decide per message whether AI is enabled.
 
+- If several rules match the same email, the standalone client now evaluates **all matching rules** before choosing one winner.
+- Winner selection is deterministic: most active match fields wins first, then longer combined match text, then lower `sort_order` as the final tie-breaker.
+- The selected rule and all competing matches are now recorded in local run/message-state diagnostics so collisions such as a broad Gmail rule vs a more specific copyright rule are visible afterwards.
+
 - If a rule has `ai_enabled=false`, the client uses the static template text only.
 - If a rule has `ai_enabled=true`, the client calls Tools' `POST /api/ai/socialgpt/respond` with the same personal token and forwards that rule's responder/persona/custom instruction/model/reasoning as explicit one-request overrides.
 - For AI-enabled matched rules, the static template is now only a fallback if the AI call fails or returns an empty/non-usable response.

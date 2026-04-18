@@ -122,7 +122,7 @@ class MessageStateStore
                 'raw_count' => count($messages),
                 'status_counts' => $statusCounts,
                 'recent' => array_slice(array_map(static function (array $message): array {
-                    return [
+                    $summary = [
                         'message_id' => (string) ($message['message_id'] ?? ''),
                         'message_key' => (string) ($message['message_key'] ?? ''),
                         'status' => (string) ($message['status'] ?? ''),
@@ -130,6 +130,18 @@ class MessageStateStore
                         'subject' => (string) ($message['subject'] ?? ''),
                         'recorded_at' => (string) ($message['recorded_at'] ?? ''),
                     ];
+
+                    if (array_key_exists('selected_rule', $message)) {
+                        $summary['selected_rule'] = is_array($message['selected_rule']) ? $message['selected_rule'] : null;
+                    }
+                    if (array_key_exists('matching_rule_count', $message)) {
+                        $summary['matching_rule_count'] = (int) $message['matching_rule_count'];
+                    }
+                    if (array_key_exists('matching_rules', $message)) {
+                        $summary['matching_rules'] = is_array($message['matching_rules']) ? $message['matching_rules'] : [];
+                    }
+
+                    return $summary;
                 }, $pendingMessages), 0, 10),
             ];
             $total += count($visibleMessages);

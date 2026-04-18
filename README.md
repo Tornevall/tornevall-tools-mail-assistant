@@ -45,7 +45,8 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
      - `MAIL_ASSISTANT_MAIL_TRANSPORT` (`smtp` | `pickup` | `php_mail` | `custom_mta` | `tools_api`)
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TRANSPORTS` (optional comma-separated fallback order such as `smtp,tools_api,pickup`)
      - SMTP keys: `MAIL_ASSISTANT_SMTP_HOST`, `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_USERNAME`, `MAIL_ASSISTANT_SMTP_PASSWORD`
-     - optional SMTP overrides: `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, `MAIL_ASSISTANT_SMTP_TIMEOUT`, `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE`
+      - optional SMTP overrides: `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, `MAIL_ASSISTANT_SMTP_TIMEOUT`, `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE`
+      - optional standalone reply fallback BCC: `MAIL_ASSISTANT_DEFAULT_BCC` (used only when neither the matched rule nor the mailbox config already supplies a BCC)
      - `MAIL_ASSISTANT_MTA_COMMAND` (used when transport is `custom_mta`)
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API` (`true|false`)
    - optional no-match fallback gate: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1` (kept off by default unless enabled in Tools config or env)
@@ -177,5 +178,6 @@ Rules can decide per message whether AI is enabled.
 - `MAIL_ASSISTANT_MAIL_FALLBACK_TRANSPORTS` can define an explicit ordered fallback chain. If it is left empty, the runner keeps the legacy compatibility behavior where `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true` appends the Tools relay as a fallback.
 - SMTP is now more forgiving when optional override keys are left blank: empty `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, and `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE` automatically fall back to sensible defaults instead of being treated as invalid configuration.
 - In practice, `MAIL_ASSISTANT_SMTP_HOST` plus the usual `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_USERNAME`, and `MAIL_ASSISTANT_SMTP_PASSWORD` are enough for most authenticated SMTP setups.
+- If neither a matched rule nor the mailbox defaults define a BCC recipient, the standalone runtime can now fall back to `MAIL_ASSISTANT_DEFAULT_BCC` from `.env`.
 - Tools relay requires a dedicated personal token (`provider_mail_support_assistant_mailer`) and the `mail-support-assistant.relay` permission for the token owner (admin bypass still applies); the relay payload can now include both `body` and additive `body_html`.
 

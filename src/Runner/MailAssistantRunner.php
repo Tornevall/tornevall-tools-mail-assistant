@@ -1146,7 +1146,7 @@ class MailAssistantRunner
             }, $references));
         }
 
-        $bcc = trim((string) (($replyConfig['bcc'] ?? null) ?: (($mailbox['defaults']['bcc'] ?? null) ?: '')));
+        $bcc = trim((string) (($replyConfig['bcc'] ?? null) ?: (($mailbox['defaults']['bcc'] ?? null) ?: Env::get('MAIL_ASSISTANT_DEFAULT_BCC', ''))));
         if ($bcc !== '') {
             $headers[] = 'Bcc: ' . $bcc;
         }

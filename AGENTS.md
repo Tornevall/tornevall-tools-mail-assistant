@@ -33,6 +33,7 @@ It is expected to:
 - `tests/generic-no-match-json-regression.php` - strict JSON allow/deny parsing coverage for unmatched-mail AI
 - `tests/generic-no-match-runner-regression.php` - runner-level guard that rejected unmatched-mail AI decisions stay unread
 - `tests/bcc-routing-regression.php` - verifies normalized `to` / `cc` / `bcc` relay recipient forwarding
+- `tests/default-bcc-env-regression.php` - verifies `.env` fallback BCC behavior when config BCC values are empty
 
 ## Current operator behavior
 
@@ -90,6 +91,7 @@ It is expected to:
 - Outer SpamAssassin wrapper prose may be ignored for unmatched-mail AI classification, but SpamAssassin score/tests should still be available as safety/risk hints.
 - Outgoing replies now support `smtp` (default), `php_mail`, `custom_mta`, and `tools_api` transports (
   `MAIL_ASSISTANT_MAIL_TRANSPORT`).
+- If neither the matched rule nor the mailbox defaults define a BCC recipient, the standalone runtime may now fall back to `MAIL_ASSISTANT_DEFAULT_BCC` from `.env`.
 - SMTP runtime keys are `MAIL_ASSISTANT_SMTP_HOST`, `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_SECURITY`,
   `MAIL_ASSISTANT_SMTP_USERNAME`, `MAIL_ASSISTANT_SMTP_PASSWORD`, `MAIL_ASSISTANT_SMTP_EHLO`,
   `MAIL_ASSISTANT_SMTP_TIMEOUT`, and optional `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE`.

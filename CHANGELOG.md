@@ -2,6 +2,7 @@
 
 ## 0.3.17 - 2026-04-18
 
+- Standalone replies can now fall back to `MAIL_ASSISTANT_DEFAULT_BCC` from `.env` when neither the matched rule nor the mailbox defaults define any BCC recipient.
 - Reply transports now normalize reply recipients more strictly before SMTP/Tools relay delivery, which hardens BCC forwarding and avoids losing BCC recipients when addresses include display names or combined header formatting.
 - Mailbox-level unmatched-mail AI now uses two separate admin-managed fields from Tools: `generic_no_match_if` for the allow-condition and `generic_no_match_instruction` for the actual reply instructions.
 - The standalone no-match AI path no longer trusts any free-form model reply. It now requires strict JSON from AI and only sends a reply when the decision is explicitly `can_reply=true` with `certainty="high"` and a non-empty `reply` payload.
@@ -11,6 +12,7 @@
 - Local run/message diagnostics now preserve the no-match AI decision metadata so operators can see why a regelless message was rejected or accepted.
 - Regression coverage now explicitly exercises the strict unmatched-mail JSON contract and verifies that rejected no-match AI decisions stay unread instead of silently mutating IMAP state.
 - Regression coverage now also includes BCC-routing verification for Tools relay delivery, including normalized `to` / `cc` / `bcc` recipient lists.
+- Regression coverage now also verifies that the new env-level default BCC is applied when mailbox/rule BCC values are empty.
 
 ## 0.3.16 - 2026-04-18
 

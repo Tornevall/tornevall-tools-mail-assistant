@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## 0.3.17 - 2026-04-18
+
+- Mailbox-level unmatched-mail AI now uses two separate admin-managed fields from Tools: `generic_no_match_if` for the allow-condition and `generic_no_match_instruction` for the actual reply instructions.
+- The standalone no-match AI path no longer trusts any free-form model reply. It now requires strict JSON from AI and only sends a reply when the decision is explicitly `can_reply=true` with `certainty="high"` and a non-empty `reply` payload.
+- If the new mailbox-level `generic_no_match_if` field is empty, unmatched-mail AI is treated as unconfigured and no fallback reply is sent.
+- SpamAssassin wrapper prose is still ignored as outer noise during that decision, while SpamAssassin score/tests remain available to the AI as risk signals.
+- Local run/message diagnostics now preserve the no-match AI decision metadata so operators can see why a regelless message was rejected or accepted.
+
+## 0.3.16 - 2026-04-18
+
+- CLI/manual runs now mirror live log lines to stdout by default (`MAIL_ASSISTANT_CLI_PROGRESS=true`), so `bash cron-run.sh` no longer stays silent until the final JSON summary is printed.
+- AI reply generation now also falls back to the configured fallback model when the primary model returns an empty response body, not only when the HTTP/API request itself throws an error.
+- The runner now records per-message `message_results[]` diagnostics in run summaries, making it easier to see whether each unread message was handled, skipped, state-skipped, warned, or failed.
+- Unread messages that already have a prior local state proving that a reply was sent are now skipped as `previous_reply_recorded_unread` instead of being auto-replied again, which prevents duplicate replies when IMAP read-state lags or was manually reset.
+- Reply flows now detect and report IMAP finalize problems (mark-seen / move / delete) explicitly through reasons such as `rule_matched_replied_imap_finalize_failed` instead of silently looking fully handled.
+- Outgoing HTML reply styling now uses stronger explicit text colors plus light-only color-scheme hints so quoted/manual replies are less likely to render white text on a white background in mail clients.
+
 ## 0.3.15 - 2026-04-18
 
 - Mail Support Assistant AI requests now explicitly default to the same reply language as the incoming mail (`response_language=auto`) instead of relying only on loose prompt inference.

@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-    private const CLIENT_VERSION = '0.3.15';
+    private const CLIENT_VERSION = '0.3.17';
 
     private string $baseUrl;
     private string $token;
@@ -109,16 +109,47 @@ class ToolsApiClient
         return $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
     }
 
-    public function generateGenericAiReply(array $mailbox, array $message, array $options = []): array
+    public function evaluateGenericNoMatchReply(array $mailbox, array $message, array $options = []): array
     {
         $primaryModel = trim((string) (($options['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
         $fallbackModel = trim((string) (($options['ai_fallback_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'o4')));
         $reasoningEffort = $this->normalizeReasoningEffort(($options['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
+        $ifCondition = trim((string) ($options['if_condition'] ?? ''));
+        $replyInstruction = trim((string) ($options['reply_instruction'] ?? ''));
+
+        if ($ifCondition === '') {
+            return [
+                'can_reply' => false,
+                'certainty' => 'low',
+                'reason' => 'Generic no-match AI condition is not configured.',
+                'decision_reason_code' => 'no_matching_rule_generic_ai_unconfigured',
+                'reply' => '',
+                'response' => '',
+                'risk_flags' => [],
+                'raw_response' => '',
+            ];
+        }
 
         $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
         $cleanBody = $this->buildIncomingMessageExcerpt($message, 2600);
-        $assistantHint = trim((string) ($options['custom_instruction'] ?? ''));
-        $userPrompt = 'A support email did not match any explicit mailbox rule. Reply briefly and helpfully only if the request seems answerable from the provided context. Use the same language as the incoming email unless the sender explicitly asks for another language. If key details are missing, ask a concise follow-up question.';
+        $userPrompt = implode("\n", [
+            'You are evaluating whether an unmatched support email may be answered safely.',
+            'Return ONLY valid JSON with this schema:',
+            '{"can_reply":true|false,"certainty":"high|medium|low","reason":"short reason","risk_flags":["..."],"reply":"reply text or empty string"}',
+            'Rules:',
+            '- Ignore outer SpamAssassin wrapper prose if it only forwards the original mail, but use SpamAssassin flags/tests as risk signals.',
+            '- Only allow a reply when the email clearly matches the admin IF condition below.',
+            '- If the mail looks like spam, scam, fraud, phishing, unsolicited sales, unsolicited collaboration outreach, vague marketing, or anything outside the IF condition, set can_reply=false.',
+            '- If there is any uncertainty, missing context, or safety doubt, set can_reply=false.',
+            '- Only set can_reply=true when you are fully confident. In that case certainty must be "high" and reply must already be written in the original sender language from the email itself.',
+            '- When can_reply=false, reply must be an empty string.',
+            '',
+            'Admin IF condition:',
+            $ifCondition,
+            '',
+            'Admin reply instructions (only use if can_reply=true):',
+            $replyInstruction !== '' ? $replyInstruction : 'Reply briefly, politely, and clearly.',
+        ]);
 
         $contextLines = [
             'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
@@ -144,23 +175,172 @@ class ToolsApiClient
             'model' => $primaryModel,
             'request_mode' => 'reply',
             'response_language' => 'auto',
+            'responder_name_override' => 'Mail Support Assistant',
+            'persona_profile_override' => 'Extremely cautious support triage classifier that only returns strict JSON.',
+            'custom_instruction_override' => 'Return JSON only. Never add commentary, markdown, or code fences unless they still contain exactly one valid JSON object.',
             'client_name' => 'Tornevall Tools Mail Assistant',
             'client_version' => self::CLIENT_VERSION,
             'client_platform' => 'php_standalone',
         ];
-        if ($assistantHint !== '') {
-            $payload['custom_instruction_override'] = $assistantHint;
+
+        $result = $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
+        $rawResponse = trim((string) ($result['response'] ?? ''));
+        $decision = $this->parseGenericNoMatchDecision($rawResponse);
+
+        $replyText = trim((string) ($decision['reply'] ?? ''));
+        $canReply = !empty($decision['can_reply']) && strtolower((string) ($decision['certainty'] ?? '')) === 'high' && $replyText !== '';
+        $reasonCode = (string) ($decision['decision_reason_code'] ?? '');
+        if ($reasonCode === '') {
+            if (empty($decision['valid_json'])) {
+                $reasonCode = 'no_matching_rule_generic_ai_invalid_json';
+            } elseif (empty($decision['can_reply'])) {
+                $reasonCode = 'no_matching_rule_generic_ai_rejected';
+            } elseif (strtolower((string) ($decision['certainty'] ?? '')) !== 'high') {
+                $reasonCode = 'no_matching_rule_generic_ai_not_certain';
+            } elseif ($replyText === '') {
+                $reasonCode = 'no_matching_rule_generic_ai_empty_reply';
+            } else {
+                $reasonCode = 'no_matching_rule_generic_ai_replied';
+            }
         }
 
-        return $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
+        return array_merge($result, [
+            'can_reply' => $canReply,
+            'certainty' => (string) ($decision['certainty'] ?? 'low'),
+            'reason' => (string) ($decision['reason'] ?? ''),
+            'decision_reason_code' => $reasonCode,
+            'reply' => $replyText,
+            'response' => $replyText,
+            'risk_flags' => (array) ($decision['risk_flags'] ?? []),
+            'raw_response' => $rawResponse,
+            'parsed_decision' => $decision,
+        ]);
+    }
+
+    private function parseGenericNoMatchDecision(string $rawResponse): array
+    {
+        $json = $this->extractJsonObject($rawResponse);
+        if ($json === '') {
+            return [
+                'valid_json' => false,
+                'can_reply' => false,
+                'certainty' => 'low',
+                'reason' => 'AI did not return a JSON object.',
+                'risk_flags' => ['invalid_json'],
+                'reply' => '',
+                'decision_reason_code' => 'no_matching_rule_generic_ai_invalid_json',
+            ];
+        }
+
+        $decoded = json_decode($json, true);
+        if (!is_array($decoded)) {
+            return [
+                'valid_json' => false,
+                'can_reply' => false,
+                'certainty' => 'low',
+                'reason' => 'AI returned malformed JSON.',
+                'risk_flags' => ['invalid_json'],
+                'reply' => '',
+                'decision_reason_code' => 'no_matching_rule_generic_ai_invalid_json',
+            ];
+        }
+
+        $canReply = $this->normalizeDecisionBool(
+            $decoded['can_reply']
+                ?? $decoded['should_reply']
+                ?? $decoded['reply_allowed']
+                ?? $decoded['answerable']
+                ?? null
+        );
+        $certainty = strtolower(trim((string) ($decoded['certainty'] ?? $decoded['confidence'] ?? 'low')));
+        if (!in_array($certainty, ['high', 'medium', 'low'], true)) {
+            $certainty = 'low';
+        }
+
+        $reason = trim((string) ($decoded['reason'] ?? $decoded['why'] ?? ''));
+        $reply = trim((string) ($decoded['reply'] ?? $decoded['response'] ?? ''));
+        $riskFlags = $decoded['risk_flags'] ?? $decoded['risks'] ?? [];
+        if (!is_array($riskFlags)) {
+            $riskFlags = [$riskFlags];
+        }
+        $riskFlags = array_values(array_filter(array_map(static function ($value): string {
+            return trim((string) $value);
+        }, $riskFlags), static function (string $value): bool {
+            return $value !== '';
+        }));
+
+        $canReply = $canReply === true;
+        if (!$canReply) {
+            $reply = '';
+        }
+
+        return [
+            'valid_json' => true,
+            'can_reply' => $canReply,
+            'certainty' => $certainty,
+            'reason' => $reason,
+            'risk_flags' => $riskFlags,
+            'reply' => $reply,
+        ];
+    }
+
+    private function extractJsonObject(string $rawResponse): string
+    {
+        $candidate = trim($rawResponse);
+        if ($candidate === '') {
+            return '';
+        }
+
+        if (preg_match('/```(?:json)?\s*(.*?)\s*```/is', $candidate, $m) === 1) {
+            $candidate = trim((string) $m[1]);
+        }
+
+        $start = strpos($candidate, '{');
+        $end = strrpos($candidate, '}');
+        if ($start === false || $end === false || $end < $start) {
+            return '';
+        }
+
+        return trim(substr($candidate, $start, $end - $start + 1));
+    }
+
+    private function normalizeDecisionBool($value): ?bool
+    {
+        if (is_bool($value)) {
+            return $value;
+        }
+
+        if (is_int($value) || is_float($value)) {
+            return ((int) $value) !== 0;
+        }
+
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $value = strtolower(trim($value));
+        if ($value === '') {
+            return null;
+        }
+
+        if (in_array($value, ['1', 'true', 'yes', 'y', 'reply', 'allow'], true)) {
+            return true;
+        }
+
+        if (in_array($value, ['0', 'false', 'no', 'n', 'skip', 'deny'], true)) {
+            return false;
+        }
+
+        return null;
     }
 
     private function executeAiRequest(array $payload, string $primaryModel, string $fallbackModel, ?string $reasoningEffort): array
     {
         $payload = $this->applyReasoningEffortToPayload($payload, $reasoningEffort);
+        $primaryResult = null;
 
         try {
-            return $this->performAiRequestWithRetry($payload);
+            $primaryResult = $this->performAiRequestWithRetry($payload);
         } catch (RuntimeException $primaryFailure) {
             if ($fallbackModel === '' || strcasecmp($fallbackModel, $primaryModel) === 0) {
                 throw new RuntimeException(
@@ -194,6 +374,65 @@ class ToolsApiClient
 
             return $fallbackResult;
         }
+
+        if ($this->hasUsableAiResponse($primaryResult)) {
+            return $primaryResult;
+        }
+
+        if ($fallbackModel === '' || strcasecmp($fallbackModel, $primaryModel) === 0) {
+            throw new RuntimeException(
+                'AI request returned an empty response (models tried: ' . $this->formatModelTrail($primaryModel) . ').'
+            );
+        }
+
+        $fallbackPayload = $payload;
+        $fallbackPayload['model'] = $fallbackModel;
+        $fallbackPayload = $this->applyReasoningEffortToPayload($fallbackPayload, $reasoningEffort);
+
+        try {
+            $fallbackResult = $this->performAiRequestWithRetry($fallbackPayload);
+        } catch (RuntimeException $fallbackFailure) {
+            throw new RuntimeException(
+                'AI request failed after empty primary response (models tried: ' . $this->formatModelTrail($primaryModel, $fallbackModel) . '): ' . $fallbackFailure->getMessage(),
+                0,
+                $fallbackFailure
+            );
+        }
+
+        if ($this->hasUsableAiResponse($fallbackResult)) {
+            if (!array_key_exists('used_fallback_model', $fallbackResult)) {
+                $fallbackResult['used_fallback_model'] = true;
+            }
+            $fallbackResult['fallback_from_model'] = $primaryModel;
+            if (!isset($fallbackResult['model']) || trim((string) $fallbackResult['model']) === '') {
+                $fallbackResult['model'] = $fallbackModel;
+            }
+
+            return $fallbackResult;
+        }
+
+        throw new RuntimeException(
+            'AI request returned an empty response (models tried: ' . $this->formatModelTrail($primaryModel, $fallbackModel) . ').'
+        );
+    }
+
+    private function hasUsableAiResponse(array $result): bool
+    {
+        $response = trim((string) ($result['response'] ?? ''));
+        if ($response !== '') {
+            return true;
+        }
+
+        $message = trim((string) ($result['message'] ?? ''));
+        if ($message === '') {
+            return false;
+        }
+
+        if (preg_match('/^(ok|success|accepted|request accepted)\.?$/i', $message) === 1) {
+            return false;
+        }
+
+        return false;
     }
 
     private function applyReasoningEffortToPayload(array $payload, ?string $reasoningEffort): array

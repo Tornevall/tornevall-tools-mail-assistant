@@ -6,11 +6,17 @@ class Logger
 {
     private string $logFile;
     private string $lastRunFile;
+    private bool $mirrorToStdout;
 
     public function __construct(?string $logFile = null, ?string $lastRunFile = null)
     {
         $this->logFile = $logFile ?: ProjectPaths::logs() . DIRECTORY_SEPARATOR . 'mail-support-assistant.log';
         $this->lastRunFile = $lastRunFile ?: ProjectPaths::storage() . DIRECTORY_SEPARATOR . 'last-run.json';
+        $this->mirrorToStdout = PHP_SAPI === 'cli' && Env::bool('MAIL_ASSISTANT_CLI_PROGRESS', true);
+
+        if ($this->mirrorToStdout && defined('STDOUT') && is_resource(STDOUT) && function_exists('stream_set_write_buffer')) {
+            @stream_set_write_buffer(STDOUT, 0);
+        }
     }
 
     public function info(string $message, array $context = []): void
@@ -39,6 +45,13 @@ class Logger
             $context ? ' ' . json_encode($context, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) : ''
         );
         file_put_contents($this->logFile, $line, FILE_APPEND);
+
+        if ($this->mirrorToStdout) {
+            fwrite(STDOUT, $line);
+            if (function_exists('flush')) {
+                @flush();
+            }
+        }
     }
 
     public function saveLastRun(array $summary): void

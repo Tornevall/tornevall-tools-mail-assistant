@@ -89,6 +89,7 @@
 
         <div class="card">
             <h2 style="margin-top:0;">Last run summary</h2>
+            <p class="muted">Look under each mailbox's <code>message_results</code> list for the current per-message outcome of the latest run.</p>
             <?php if (!empty($lastRun)): ?>
                 <pre id="last-run-panel"><?php echo htmlspecialchars(json_encode($lastRun, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE), ENT_QUOTES, 'UTF-8'); ?></pre>
             <?php else: ?>

@@ -1,4 +1,4 @@
-n# AGENTS.md - tornevall-tools-mail-assistant
+# AGENTS.md - tornevall-tools-mail-assistant
 
 Project-local guide for `projects/tornevall-tools-mail-assistant`.
 
@@ -41,6 +41,9 @@ It is expected to:
   limited to `.env`, sessions, logs, last-run summaries, and optional message copies in `storage/`.
 - Handled or explicitly ignored mail is still recorded locally by normalized `Message-Id`, but that history is now
   diagnostic only and must not block later re-evaluation of mail that is still unread in IMAP.
+- Exception: if a message is still unread in IMAP but the local history already proves that a reply was sent for that
+  exact message key, the runner should skip automatic resend and surface `previous_reply_recorded_unread` instead of
+  sending a duplicate reply.
 - If `Message-Id` is missing, the runner synthesizes a stable local fallback message key so prior outcomes still appear
   in `storage/state/message-state.json` for diagnostics.
 - SpamAssassin headers should be treated as heuristics only: severe/high-score messages may be skipped, but
@@ -56,9 +59,12 @@ It is expected to:
   specific winner deterministically, and record both the winning rule and the competing matches so operators can see why
   one rule won over another.
 - No-match handling can now be config-gated to try one generic AI fallback reply (`generic_no_match_ai_enabled`) before
-  ignoring; if fallback is disabled, unanswerable, or fails, the message remains ignored with a specific reason code.
+  ignoring; that mailbox-level fallback now depends on two separate config fields too: `generic_no_match_if` (when an otherwise unmatched mail may be answered at all) and `generic_no_match_instruction` (how the answer should be written if allowed).
+- The unmatched-mail AI path must require a strict JSON decision and may only send a reply when the model explicitly returns an allow decision with high certainty.
 - Generic no-match outcome reasons should stay explicit in state/logs: `no_matching_rule_generic_ai_disabled`,
-  `no_matching_rule_generic_ai_unanswerable`, `no_matching_rule_generic_ai_error`,
+  `no_matching_rule_generic_ai_unconfigured`, `no_matching_rule_generic_ai_rejected`,
+  `no_matching_rule_generic_ai_invalid_json`, `no_matching_rule_generic_ai_not_certain`,
+  `no_matching_rule_generic_ai_empty_reply`, `no_matching_rule_generic_ai_error`,
   `no_matching_rule_generic_ai_replied`.
 - Runner summaries now keep `messages_read_skipped` as a dedicated category; mail that is already seen at ingest should
   not be mixed into `no_matching_rule` diagnostics.
@@ -74,8 +80,10 @@ It is expected to:
 - The same personal token is used both to fetch config and, when enabled, to call Tools-hosted AI.
 - For matched rules with `ai_enabled=true`, the standalone client must treat the rule's responder/persona/custom instruction/model/reasoning values as authoritative AI override inputs for that single Tools AI request.
 - Temporary AI throttle failures (for example `429 / Too Many Attempts`) should be retried before the standalone client gives up on a matched rule's AI reply.
+- Empty AI responses should also trigger the fallback model path; fallback is not only for thrown HTTP/API exceptions.
 - If an AI-enabled matched rule still fails after retries and no explicit `template_text` fallback is configured, do not send the old generic canned sentence; abort/log that reply instead of pretending the issue was handled.
 - Mailbox-level `generic_no_match_*` AI settings are only for the unmatched-mail fallback path and must not replace matched rule AI overrides.
+- Outer SpamAssassin wrapper prose may be ignored for unmatched-mail AI classification, but SpamAssassin score/tests should still be available as safety/risk hints.
 - Outgoing replies now support `smtp` (default), `php_mail`, `custom_mta`, and `tools_api` transports (
   `MAIL_ASSISTANT_MAIL_TRANSPORT`).
 - SMTP runtime keys are `MAIL_ASSISTANT_SMTP_HOST`, `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_SECURITY`,
@@ -85,6 +93,14 @@ It is expected to:
   `POST /api/mail-support-assistant/send-reply` using `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`.
 - Tools relay payloads may now include additive `body_html`; when present, relay delivery should preserve the same
   multipart plain-text + HTML reply body instead of downgrading to text only.
+- CLI/manual runs now mirror logger output to stdout by default, so `php run` / `cron-run.sh` should show live progress
+  while still saving the persistent log file.
+- Run summaries should include per-message `message_results[]` diagnostics, not only aggregate counters.
+- If reply transport succeeds but IMAP post-handle finalize (`markSeen`, move, delete) fails, the run should surface an
+  explicit warning reason such as `rule_matched_replied_imap_finalize_failed` instead of silently pretending the whole
+  mailbox mutation finished.
+- Outgoing HTML mail should keep explicit dark text colors on the main wrapper and quoted request excerpt so manual
+  replies in mail clients do not degrade into white text on white background.
 - Tools relay tokens are expected to be dedicated personal keys (provider `provider_mail_support_assistant_mailer`) and
   should be permission-gated server-side (`mail-support-assistant.relay`).
 - Mailbox config may now also expose `generic_no_match_ai_reasoning_effort`, and matched rules may now expose `ai_reasoning_effort`.

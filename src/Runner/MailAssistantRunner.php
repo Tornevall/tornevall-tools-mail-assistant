@@ -692,9 +692,9 @@ class MailAssistantRunner
             return;
         }
 
-        $transport = strtolower(trim((string) Env::get('MAIL_ASSISTANT_MAIL_TRANSPORT', 'php_mail')));
-        if (!in_array($transport, ['php_mail', 'custom_mta', 'tools_api'], true)) {
-            $transport = 'php_mail';
+        $transport = strtolower(trim((string) Env::get('MAIL_ASSISTANT_MAIL_TRANSPORT', 'smtp')));
+        if (!in_array($transport, ['smtp', 'pickup', 'php_mail', 'custom_mta', 'tools_api'], true)) {
+            $transport = 'smtp';
         }
 
         $fallbackToTools = Env::bool('MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API', true);
@@ -702,6 +702,18 @@ class MailAssistantRunner
         try {
             if ($transport === 'tools_api') {
                 $this->sendReplyViaToolsRelay($mailbox, $rule, $message, $to, $subject, $body, $headers, 'tools_api_primary');
+                return;
+            }
+
+            if ($transport === 'smtp') {
+                $this->sendReplyViaSmtp($to, $subject, $body, $headers);
+                $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'smtp']);
+                return;
+            }
+
+            if ($transport === 'pickup') {
+                $this->sendReplyViaPickup($to, $subject, $body, $headers);
+                $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'pickup']);
                 return;
             }
 
@@ -738,9 +750,9 @@ class MailAssistantRunner
 
     private function sendReplyViaCustomMta(string $to, string $subject, string $body, array $headers): void
     {
-        $command = trim((string) Env::get('MAIL_ASSISTANT_MTA_COMMAND', '/usr/sbin/sendmail -t -i'));
+        $command = trim((string) Env::get('MAIL_ASSISTANT_MTA_COMMAND', ''));
         if ($command === '') {
-            throw new RuntimeException('MAIL_ASSISTANT_MTA_COMMAND is empty.');
+            throw new RuntimeException('MAIL_ASSISTANT_MTA_COMMAND is not configured.');
         }
 
         $process = @popen($command, 'w');
@@ -758,6 +770,200 @@ class MailAssistantRunner
         if ($result !== 0) {
             throw new RuntimeException('Custom MTA command failed with exit code ' . $result . '.');
         }
+    }
+
+    private function sendReplyViaPickup(string $to, string $subject, string $body, array $headers): void
+    {
+        $dir = rtrim(trim((string) Env::get('MAIL_ASSISTANT_PICKUP_DIR', '')), '/\\');
+        if ($dir === '') {
+            throw new RuntimeException('MAIL_ASSISTANT_PICKUP_DIR is not configured.');
+        }
+        if (!is_dir($dir) || !is_writable($dir)) {
+            throw new RuntimeException('MAIL_ASSISTANT_PICKUP_DIR is not a writable directory: ' . $dir);
+        }
+
+        $filename = $dir . DIRECTORY_SEPARATOR . 'mail-' . uniqid('', true) . '.msg';
+        $rawMessage = implode("\r\n", array_merge([
+            'To: ' . $to,
+            'Subject: ' . $subject,
+        ], $headers, ['', $body]));
+
+        if (@file_put_contents($filename, $rawMessage) === false) {
+            throw new RuntimeException('Could not write message to pickup directory: ' . $filename);
+        }
+    }
+
+    private function sendReplyViaSmtp(string $to, string $subject, string $body, array $headers): void
+    {
+        $host = trim((string) Env::get('MAIL_ASSISTANT_SMTP_HOST', ''));
+        $port = (int) Env::get('MAIL_ASSISTANT_SMTP_PORT', '587');
+        $security = strtolower(trim((string) Env::get('MAIL_ASSISTANT_SMTP_SECURITY', 'tls')));
+        $username = trim((string) Env::get('MAIL_ASSISTANT_SMTP_USERNAME', ''));
+        $password = (string) Env::get('MAIL_ASSISTANT_SMTP_PASSWORD', '');
+        $ehlo = trim((string) Env::get('MAIL_ASSISTANT_SMTP_EHLO', 'localhost'));
+        $timeout = max(5, (int) Env::get('MAIL_ASSISTANT_SMTP_TIMEOUT', '20'));
+
+        if ($host === '') {
+            throw new RuntimeException('MAIL_ASSISTANT_SMTP_HOST is not configured.');
+        }
+        if ($port < 1 || $port > 65535) {
+            throw new RuntimeException('MAIL_ASSISTANT_SMTP_PORT is invalid.');
+        }
+        if (!in_array($security, ['tls', 'ssl', 'none'], true)) {
+            throw new RuntimeException('MAIL_ASSISTANT_SMTP_SECURITY must be tls, ssl, or none.');
+        }
+
+        $fromHeader = $this->extractHeaderValue($headers, 'From');
+        $fromEmail = $this->extractFirstEmail($fromHeader);
+        if ($fromEmail === '') {
+            throw new RuntimeException('Could not resolve sender email from From header for SMTP delivery.');
+        }
+
+        $envelopeFrom = trim((string) Env::get('MAIL_ASSISTANT_SMTP_FROM_ENVELOPE', $fromEmail));
+        if (!filter_var($envelopeFrom, FILTER_VALIDATE_EMAIL)) {
+            throw new RuntimeException('MAIL_ASSISTANT_SMTP_FROM_ENVELOPE is invalid.');
+        }
+
+        $envelopeRecipients = array_values(array_unique(array_filter(array_merge(
+            [$to],
+            $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Cc')),
+            $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Bcc'))
+        ))));
+        if (!count($envelopeRecipients)) {
+            throw new RuntimeException('No valid SMTP recipients resolved.');
+        }
+
+        $transportHost = $security === 'ssl' ? 'ssl://' . $host : $host;
+        $socket = @stream_socket_client($transportHost . ':' . $port, $errno, $errstr, $timeout, STREAM_CLIENT_CONNECT);
+        if (!is_resource($socket)) {
+            throw new RuntimeException('SMTP connect failed: ' . trim($errstr . ' (' . $errno . ')'));
+        }
+
+        stream_set_timeout($socket, $timeout);
+
+        try {
+            $this->smtpExpect($socket, [220], 'SMTP greeting');
+            $this->smtpCommand($socket, 'EHLO ' . $ehlo, [250], 'SMTP EHLO');
+
+            if ($security === 'tls') {
+                $this->smtpCommand($socket, 'STARTTLS', [220], 'SMTP STARTTLS');
+                if (!@stream_socket_enable_crypto($socket, true, STREAM_CRYPTO_METHOD_TLS_CLIENT)) {
+                    throw new RuntimeException('SMTP STARTTLS handshake failed.');
+                }
+                $this->smtpCommand($socket, 'EHLO ' . $ehlo, [250], 'SMTP EHLO after STARTTLS');
+            }
+
+            if ($username !== '' || $password !== '') {
+                if ($username === '' || $password === '') {
+                    throw new RuntimeException('MAIL_ASSISTANT_SMTP_USERNAME and MAIL_ASSISTANT_SMTP_PASSWORD must both be set for SMTP auth.');
+                }
+                $this->smtpCommand($socket, 'AUTH LOGIN', [334], 'SMTP AUTH LOGIN start');
+                $this->smtpCommand($socket, base64_encode($username), [334], 'SMTP AUTH LOGIN username');
+                $this->smtpCommand($socket, base64_encode($password), [235], 'SMTP AUTH LOGIN password');
+            }
+
+            $this->smtpCommand($socket, 'MAIL FROM:<' . $envelopeFrom . '>', [250], 'SMTP MAIL FROM');
+            foreach ($envelopeRecipients as $recipient) {
+                $this->smtpCommand($socket, 'RCPT TO:<' . $recipient . '>', [250, 251], 'SMTP RCPT TO');
+            }
+
+            $this->smtpCommand($socket, 'DATA', [354], 'SMTP DATA');
+
+            $dataHeaders = [];
+            foreach ($headers as $header) {
+                if (stripos($header, 'Bcc:') === 0) {
+                    continue;
+                }
+                $dataHeaders[] = $header;
+            }
+
+            $raw = implode("\r\n", array_merge([
+                'To: ' . $to,
+                'Subject: ' . $subject,
+            ], $dataHeaders, ['', $body]));
+            $raw = str_replace(["\r\n", "\r"], "\n", $raw);
+            $raw = preg_replace('/^\./m', '..', $raw) ?? $raw;
+            $raw = str_replace("\n", "\r\n", $raw);
+
+            fwrite($socket, $raw . "\r\n.\r\n");
+            $this->smtpExpect($socket, [250], 'SMTP message body');
+            $this->smtpCommand($socket, 'QUIT', [221], 'SMTP QUIT');
+        } finally {
+            if (is_resource($socket)) {
+                fclose($socket);
+            }
+        }
+    }
+
+    private function smtpCommand($socket, string $command, array $expectedCodes, string $context): string
+    {
+        fwrite($socket, $command . "\r\n");
+
+        return $this->smtpExpect($socket, $expectedCodes, $context);
+    }
+
+    private function smtpExpect($socket, array $expectedCodes, string $context): string
+    {
+        $response = '';
+        while (($line = fgets($socket, 515)) !== false) {
+            $response .= $line;
+            if (preg_match('/^\d{3}\s/', $line) === 1) {
+                break;
+            }
+        }
+
+        $responseTrimmed = trim($response);
+        if ($responseTrimmed === '') {
+            throw new RuntimeException($context . ' failed: empty SMTP response.');
+        }
+
+        $code = (int) substr($responseTrimmed, 0, 3);
+        if (!in_array($code, $expectedCodes, true)) {
+            throw new RuntimeException($context . ' failed: ' . $responseTrimmed);
+        }
+
+        return $responseTrimmed;
+    }
+
+    private function extractHeaderValue(array $headers, string $name): string
+    {
+        foreach ($headers as $header) {
+            if (stripos((string) $header, $name . ':') === 0) {
+                return trim((string) substr((string) $header, strlen($name) + 1));
+            }
+        }
+
+        return '';
+    }
+
+    private function extractFirstEmail(string $headerValue): string
+    {
+        $emails = $this->extractEmailsFromHeaderValue($headerValue);
+
+        return $emails[0] ?? '';
+    }
+
+    private function extractEmailsFromHeaderValue(string $headerValue): array
+    {
+        $result = [];
+        foreach (preg_split('/,/', $headerValue) ?: [] as $part) {
+            $part = trim((string) $part);
+            if ($part === '') {
+                continue;
+            }
+
+            if (preg_match('/<([^>]+)>/', $part, $m) === 1) {
+                $email = trim((string) $m[1]);
+            } else {
+                $email = trim($part, '"\' ');
+            }
+
+            if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                $result[] = strtolower($email);
+            }
+        }
+
+        return array_values(array_unique($result));
     }
 
     private function sendReplyViaToolsRelay(

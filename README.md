@@ -41,7 +41,8 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
    - optional: `MAIL_ASSISTANT_SPAMASSASSIN_SKIP_SCORE` and `MAIL_ASSISTANT_SPAMASSASSIN_COPY_SCORE`
    - optional AI tuning: `MAIL_ASSISTANT_AI_MODEL`, `MAIL_ASSISTANT_AI_FALLBACK_MODEL`, `MAIL_ASSISTANT_AI_REASONING_EFFORT`
    - optional mail transport tuning:
-     - `MAIL_ASSISTANT_MAIL_TRANSPORT` (`php_mail` | `custom_mta` | `tools_api`)
+     - `MAIL_ASSISTANT_MAIL_TRANSPORT` (`smtp` | `php_mail` | `custom_mta` | `tools_api`)
+     - SMTP keys: `MAIL_ASSISTANT_SMTP_HOST`, `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_USERNAME`, `MAIL_ASSISTANT_SMTP_PASSWORD`, `MAIL_ASSISTANT_SMTP_EHLO`, `MAIL_ASSISTANT_SMTP_TIMEOUT`, `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE`
      - `MAIL_ASSISTANT_MTA_COMMAND` (used when transport is `custom_mta`)
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API` (`true|false`)
    - optional no-match fallback gate: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1` (kept off by default unless enabled in Tools config or env)
@@ -138,7 +139,8 @@ Rules can decide per message whether AI is enabled.
 - Local SpamAssassin/debug copies are written under `storage/cache/message-copies/` when the runner detects a rewritten wrapper or another message worth preserving for review.
 - The mini dashboard now shows both the last run summary and the local message-history file so operators can see prior outcomes without that history blocking unread reruns.
 - Reply sending now supports multiple transports:
-  - `php_mail` (default, uses local PHP `mail()`)
+  - `smtp` (default, direct SMTP delivery without requiring local sendmail/postfix)
+  - `php_mail` (legacy/local PHP `mail()`)
   - `custom_mta` (pipes RFC822 message to `MAIL_ASSISTANT_MTA_COMMAND`)
   - `tools_api` (relays via `POST /api/mail-support-assistant/send-reply`)
 - If local transport fails and `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`, the runner automatically retries through the Tools relay endpoint.

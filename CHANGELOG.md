@@ -1,46 +1,91 @@
 # CHANGELOG
 
+## 0.3.5 - 2026-04-18
+
+- Added `pickup` transport mode: writes a properly-formatted RFC 2822 message file to a local MTA spool/pickup
+  directory (`MAIL_ASSISTANT_PICKUP_DIR`, e.g. `/var/spool/postfix/maildrop`). No sendmail or command invocation
+  needed; the MTA pickup daemon collects the file automatically.
+- Removed all sendmail references: `custom_mta` default command is now empty and requires explicit configuration in
+  `MAIL_ASSISTANT_MTA_COMMAND`; the example comment now references `postdrop` instead of `sendmail`.
+- Synced `.env` and `.env.example` so both cover identical keys in the same section order — `.env.example` keeps safe
+  placeholder values while `.env` holds the real deployment values.
+- Added `MAIL_ASSISTANT_PICKUP_DIR` to both `.env` and `.env.example`.
+
+## 0.3.4 - 2026-04-18
+
+- Added first-class SMTP transport support in `MailAssistantRunner` (supports `none|tls|ssl`, optional AUTH LOGIN,
+  configurable timeout/EHLO/envelope-from).
+- Changed default outgoing transport from `php_mail` to `smtp` so standalone runs no longer depend on local
+  Postfix/sendmail by default.
+- Added SMTP environment keys in both `.env` and `.env.example` (`MAIL_ASSISTANT_SMTP_*`).
+- Kept `php_mail`, `custom_mta`, and `tools_api` transports available, with existing fallback-to-Tools behavior intact.
+
 ## 0.3.3 - 2026-04-18
 
-- Fixed `Array to string conversion` warnings in `ToolsApiClient` error handling by normalizing array-style API messages into readable strings.
+- Fixed `Array to string conversion` warnings in `ToolsApiClient` error handling by normalizing array-style API messages
+  into readable strings.
 - Added env-driven outgoing mail transport selection in the runner: `php_mail`, `custom_mta`, and `tools_api`.
-- Added optional custom MTA command support via `MAIL_ASSISTANT_MTA_COMMAND` when `MAIL_ASSISTANT_MAIL_TRANSPORT=custom_mta`.
-- Added optional fallback from local transport failures to Tools mail relay via `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`.
-- Added dedicated relay token env support (`MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`) for `POST /api/mail-support-assistant/send-reply`.
+- Added optional custom MTA command support via `MAIL_ASSISTANT_MTA_COMMAND` when
+  `MAIL_ASSISTANT_MAIL_TRANSPORT=custom_mta`.
+- Added optional fallback from local transport failures to Tools mail relay via
+  `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`.
+- Added dedicated relay token env support (`MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`) for
+  `POST /api/mail-support-assistant/send-reply`.
 
 ## 0.3.2 - 2026-04-18
 
-- Local `message-state.json` is now diagnostic history only and no longer blocks unread mail from being re-evaluated on later runs.
-- Already-read IMAP mail is still skipped immediately, but unread messages that were previously handled or ignored can now match newly added rules without clearing local state first.
-- Runner summaries now expose `messages_previously_recorded_unread` / mailbox `previously_recorded_unread` so operators can see when an unread message was found in local history and intentionally re-checked.
-- README and mini dashboard wording now make it explicit that the standalone web UI is optional and that the local message-history file is non-blocking.
+- Local `message-state.json` is now diagnostic history only and no longer blocks unread mail from being re-evaluated on
+  later runs.
+- Already-read IMAP mail is still skipped immediately, but unread messages that were previously handled or ignored can
+  now match newly added rules without clearing local state first.
+- Runner summaries now expose `messages_previously_recorded_unread` / mailbox `previously_recorded_unread` so operators
+  can see when an unread message was found in local history and intentionally re-checked.
+- README and mini dashboard wording now make it explicit that the standalone web UI is optional and that the local
+  message-history file is non-blocking.
 
 ## 0.3.1 - 2026-04-18
 
-- Added explicit `messages_read_skipped` / `read_skipped` counters in runner summaries so already-read mail is visible as its own category instead of blending with no-match skips.
-- IMAP message payloads now include an `is_seen` flag, and the runner now skips messages that are already marked read at ingest without recording them as `no_matching_rule` ignored events.
-- Local message-state summaries now expose `excluded_read_records` and `raw_count` metadata, while default `recent` output hides records marked with reason `already_read_at_ingest`.
+- Added explicit `messages_read_skipped` / `read_skipped` counters in runner summaries so already-read mail is visible
+  as its own category instead of blending with no-match skips.
+- IMAP message payloads now include an `is_seen` flag, and the runner now skips messages that are already marked read at
+  ingest without recording them as `no_matching_rule` ignored events.
+- Local message-state summaries now expose `excluded_read_records` and `raw_count` metadata, while default `recent`
+  output hides records marked with reason `already_read_at_ingest`.
 
 ## 0.3.0 - 2026-04-17
 
-- Added a config-gated generic AI fallback path for `no_matching_rule` emails, so unmatched support mail can still get a helpful reply when enabled instead of always being ignored.
-- Added answerability checks for generic fallback replies; empty/refusal-style outputs are now treated as unanswerable and remain ignored.
-- Added explicit no-match state reasons (`no_matching_rule_generic_ai_disabled`, `no_matching_rule_generic_ai_unanswerable`, `no_matching_rule_generic_ai_error`, `no_matching_rule_generic_ai_replied`) to improve operator diagnostics.
-- AI reply generation now defaults to a primary model (`gpt-5.4`) and retries once with a fallback model (`gpt-4o-mini`) when the primary request fails.
-- Reasoning effort is now configurable (`MAIL_ASSISTANT_AI_REASONING_EFFORT`) and is forwarded on both primary and fallback requests.
-- AI context preparation now strips HTML/MIME boundary noise from incoming message text so summaries stay focused on the actual user question/content.
-- Reply-chain handling is now stronger: normalized subjects strip `Re:`/`Fwd:`/`Sv:` prefixes before rule matching, quoted historical mail blocks are stripped from the body before matching/AI summaries, and outgoing replies now preserve `In-Reply-To` / `References` headers.
-- IMAP message parsing now stores real `message_id` values plus a stable synthesized fallback `message_key` when the header is missing, so skipped/handled mail finally appears in local message-state summaries.
-- No-match skips are now logged more explicitly with mailbox/from/to/subject context to make `scanned` but `handled=0` runs easier to debug.
+- Added a config-gated generic AI fallback path for `no_matching_rule` emails, so unmatched support mail can still get a
+  helpful reply when enabled instead of always being ignored.
+- Added answerability checks for generic fallback replies; empty/refusal-style outputs are now treated as unanswerable
+  and remain ignored.
+- Added explicit no-match state reasons (`no_matching_rule_generic_ai_disabled`,
+  `no_matching_rule_generic_ai_unanswerable`, `no_matching_rule_generic_ai_error`,
+  `no_matching_rule_generic_ai_replied`) to improve operator diagnostics.
+- AI reply generation now defaults to a primary model (`gpt-5.4`) and retries once with a fallback model (`gpt-4o-mini`)
+  when the primary request fails.
+- Reasoning effort is now configurable (`MAIL_ASSISTANT_AI_REASONING_EFFORT`) and is forwarded on both primary and
+  fallback requests.
+- AI context preparation now strips HTML/MIME boundary noise from incoming message text so summaries stay focused on the
+  actual user question/content.
+- Reply-chain handling is now stronger: normalized subjects strip `Re:`/`Fwd:`/`Sv:` prefixes before rule matching,
+  quoted historical mail blocks are stripped from the body before matching/AI summaries, and outgoing replies now
+  preserve `In-Reply-To` / `References` headers.
+- IMAP message parsing now stores real `message_id` values plus a stable synthesized fallback `message_key` when the
+  header is missing, so skipped/handled mail finally appears in local message-state summaries.
+- No-match skips are now logged more explicitly with mailbox/from/to/subject context to make `scanned` but `handled=0`
+  runs easier to debug.
 
 ## 0.2.0 - 2026-04-17
 
-- Added local `Message-Id` persistence under `storage/state/message-state.json` so handled or explicitly ignored mail is not reprocessed if it remains unread in IMAP.
+- Added local `Message-Id` persistence under `storage/state/message-state.json` so handled or explicitly ignored mail is
+  not reprocessed if it remains unread in IMAP.
 - Runner summaries and the mini dashboard now expose the local message-state overview alongside the last-run summary.
 - Renamed/documented the standalone project under `projects/tornevall-tools-mail-assistant`.
-- Clarified that the project stays plain PHP and databaseless locally; mailbox credentials remain managed in Tools admin.
+- Clarified that the project stays plain PHP and databaseless locally; mailbox credentials remain managed in Tools
+  admin.
 - Added AJAX dashboard actions for refresh, self-test, and safe dry-run execution without page reloads.
-- Added SpamAssassin header parsing, wrapper stripping, high-score skip heuristics, and optional local message-copy preservation under `storage/cache/message-copies/`.
+- Added SpamAssassin header parsing, wrapper stripping, high-score skip heuristics, and optional local message-copy
+  preservation under `storage/cache/message-copies/`.
 - Added richer runner summaries for SpamAssassin-driven skips and saved copies.
 
 ## 0.1.0 - 2026-04-17

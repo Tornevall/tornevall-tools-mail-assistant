@@ -1,4 +1,4 @@
-<!doctype html>
+c<!doctype html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
@@ -52,8 +52,25 @@
         <button class="btn secondary" type="button" data-action="refresh">Refresh dashboard</button>
         <button class="btn" type="button" data-action="self-test">Run self-test</button>
         <button class="btn" type="button" data-action="run-dry">Run dry-run now</button>
+        <button class="btn" type="button" style="background:#b91c1c;" data-action="open-cleanup">🗑 Cleanup storage</button>
     </div>
     <div class="statusline" id="ajax-status">Ready.</div>
+
+    <!-- Cleanup modal -->
+    <div id="cleanup-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:999; align-items:center; justify-content:center;">
+        <div style="background:#fff; border-radius:14px; padding:28px; max-width:400px; width:90%; box-shadow:0 20px 60px rgba(0,0,0,.3);">
+            <h3 style="margin-top:0;">Cleanup storage</h3>
+            <p class="muted" style="font-size:.9rem;">Choose what to purge. This cannot be undone.</p>
+            <label style="display:block; margin-bottom:8px;"><input type="checkbox" id="cleanup-log" checked> Log file</label>
+            <label style="display:block; margin-bottom:8px;"><input type="checkbox" id="cleanup-last-run" checked> Last run summary</label>
+            <label style="display:block; margin-bottom:8px;"><input type="checkbox" id="cleanup-state" checked> Message history / state</label>
+            <label style="display:block; margin-bottom:16px;"><input type="checkbox" id="cleanup-copies"> Saved message copies</label>
+            <div style="display:flex; gap:10px; justify-content:flex-end;">
+                <button class="btn mutedbtn" type="button" id="cleanup-cancel">Cancel</button>
+                <button class="btn" type="button" style="background:#b91c1c;" id="cleanup-confirm">Purge selected</button>
+            </div>
+        </div>
+    </div>
 
     <div class="grid">
         <div class="card">
@@ -171,9 +188,14 @@
     document.querySelectorAll('[data-action]').forEach((button) => {
         button.addEventListener('click', async () => {
             const action = button.getAttribute('data-action');
-            if (!action) {
+            if (!action) return;
+
+            if (action === 'open-cleanup') {
+                const modal = document.getElementById('cleanup-modal');
+                if (modal) modal.style.display = 'flex';
                 return;
             }
+
             button.disabled = true;
             setStatus(`Running ${action}...`);
             try {
@@ -193,8 +215,46 @@
             }
         });
     });
+
+    // Cleanup modal
+    const cleanupModal = document.getElementById('cleanup-modal');
+    const cleanupCancel = document.getElementById('cleanup-cancel');
+    const cleanupConfirm = document.getElementById('cleanup-confirm');
+
+    if (cleanupCancel) {
+        cleanupCancel.addEventListener('click', () => {
+            if (cleanupModal) cleanupModal.style.display = 'none';
+        });
+    }
+
+    if (cleanupConfirm) {
+        cleanupConfirm.addEventListener('click', async () => {
+            cleanupConfirm.disabled = true;
+            setStatus('Purging storage...');
+            if (cleanupModal) cleanupModal.style.display = 'none';
+
+            const log      = document.getElementById('cleanup-log')?.checked ? '1' : '0';
+            const last_run = document.getElementById('cleanup-last-run')?.checked ? '1' : '0';
+            const state    = document.getElementById('cleanup-state')?.checked ? '1' : '0';
+            const copies   = document.getElementById('cleanup-copies')?.checked ? '1' : '0';
+            const body = `log=${log}&last_run=${last_run}&state=${state}&copies=${copies}`;
+
+            try {
+                const payload = await request('cleanup', { method: 'POST', body });
+                applyDashboard(payload.data ?? payload);
+                const purged = payload.result?.purged ?? [];
+                setStatus('Cleanup done. Purged: ' + (purged.length ? purged.join(', ') : 'nothing'));
+            } catch (error) {
+                setStatus(error instanceof Error ? error.message : 'Cleanup failed.', true);
+            } finally {
+                cleanupConfirm.disabled = false;
+            }
+        });
+    }
 })();
 </script>
 </body>
 </html>
+
+
 

@@ -12,6 +12,8 @@ $options = [
     'limit' => null,
     'mailbox' => null,
     'self_test' => false,
+    'cleanup' => false,
+    'cleanup_copies' => false,
     'help' => false,
 ];
 
@@ -27,6 +29,15 @@ foreach (array_slice($argv, 1) as $argument) {
     }
     if ($argument === '--dry-run' || $argument === 'dry-run' || $argument === 'dry') {
         $options['dry_run'] = true;
+        continue;
+    }
+    if ($argument === '--cleanup') {
+        $options['cleanup'] = true;
+        continue;
+    }
+    if ($argument === '--cleanup-copies') {
+        $options['cleanup'] = true;
+        $options['cleanup_copies'] = true;
         continue;
     }
     if (strpos($argument, '--limit=') === 0) {
@@ -45,6 +56,8 @@ if ($options['help']) {
     echo "  php run --help\n";
     echo "  php run --self-test\n";
     echo "  php run --dry-run [--limit=5] [--mailbox=12]\n";
+    echo "  php run --cleanup              Purge log, last-run and message state\n";
+    echo "  php run --cleanup-copies       Same + delete saved message copies\n";
     echo "\nEnv keys:\n";
     echo "  MAIL_ASSISTANT_TOOLS_BASE_URL\n";
     echo "  MAIL_ASSISTANT_TOOLS_TOKEN\n";
@@ -64,6 +77,17 @@ $runner = new MailAssistantRunner(new ToolsApiClient(), $logger);
 
 if ($options['self_test']) {
     $result = $runner->selfTest();
+    echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    exit(0);
+}
+
+if ($options['cleanup']) {
+    $result = $runner->cleanup([
+        'log'      => true,
+        'last_run' => true,
+        'state'    => true,
+        'copies'   => $options['cleanup_copies'],
+    ]);
     echo json_encode($result, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
     exit(0);
 }

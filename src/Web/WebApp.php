@@ -1,4 +1,4 @@
-<?php
+ro<?php
 
 namespace MailSupportAssistant\Web;
 
@@ -105,6 +105,26 @@ class WebApp
                 $this->json([
                     'ok' => true,
                     'result' => $this->runner->selfTest(),
+                    'data' => $this->buildDashboardPayload(),
+                ]);
+            }
+
+            if ($action === 'cleanup') {
+                if ($method !== 'POST') {
+                    $this->json(['ok' => false, 'message' => 'POST required.'], 405);
+                }
+
+                $options = [
+                    'log'       => $this->requestParam('log') !== '0',
+                    'last_run'  => $this->requestParam('last_run') !== '0',
+                    'state'     => $this->requestParam('state') !== '0',
+                    'copies'    => $this->requestParam('copies') === '1',
+                ];
+
+                $result = $this->runner->cleanup($options);
+                $this->json([
+                    'ok' => true,
+                    'result' => $result,
                     'data' => $this->buildDashboardPayload(),
                 ]);
             }

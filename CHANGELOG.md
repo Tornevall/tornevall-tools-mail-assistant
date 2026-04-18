@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## 0.3.7 - 2026-04-18
+
+- Added storage cleanup feature: purge log, last-run summary, message state, and saved message copies in one operation.
+- `MailAssistantRunner::cleanup()` orchestrates all purge targets with granular on/off flags.
+- `Logger::purgeLog()` and `Logger::purgeLastRun()` clear the log file and last-run JSON.
+- `MessageStateStore::purge()` resets the message-state JSON while keeping the file structure intact.
+- CLI: `php run --cleanup` purges log + last-run + state; `--cleanup-copies` also deletes saved message copies.
+- Dashboard: new red **🗑 Cleanup storage** button opens a modal where each target (log, last-run, state, copies) can be toggled before confirming the purge.
+
 ## 0.3.6 - 2026-04-18
 
 - `message_state` summary `recent` list now only shows messages that are NOT yet handled (status ≠ `handled`).

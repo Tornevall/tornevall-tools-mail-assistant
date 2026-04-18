@@ -66,5 +66,18 @@ class Logger
         $content = file($this->logFile, FILE_IGNORE_NEW_LINES) ?: [];
         return array_slice($content, -1 * max(1, $lines));
     }
-}
 
+    public function purgeLog(): void
+    {
+        if (is_file($this->logFile)) {
+            file_put_contents($this->logFile, '');
+        }
+    }
+
+    public function purgeLastRun(): void
+    {
+        if (is_file($this->lastRunFile)) {
+            unlink($this->lastRunFile);
+        }
+    }
+}

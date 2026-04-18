@@ -167,5 +167,13 @@ class MessageStateStore
     {
         return strtolower(trim($messageKey));
     }
+
+    public function purge(): void
+    {
+        $state = $this->load();
+        $state['mailboxes'] = [];
+        $state['updated_at'] = date('c');
+        $this->save($state);
+    }
 }
 

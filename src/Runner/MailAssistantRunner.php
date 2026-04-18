@@ -42,6 +42,54 @@ class MailAssistantRunner
         return $this->messageState->summary();
     }
 
+    public function cleanup(array $options = []): array
+    {
+        $purgeLog = !isset($options['log']) || !empty($options['log']);
+        $purgeLastRun = !isset($options['last_run']) || !empty($options['last_run']);
+        $purgeState = !isset($options['state']) || !empty($options['state']);
+        $purgeCopies = !empty($options['copies']);
+
+        $result = [
+            'ok' => true,
+            'timestamp' => date('c'),
+            'purged' => [],
+        ];
+
+        if ($purgeLog) {
+            $this->logger->purgeLog();
+            $result['purged'][] = 'log';
+        }
+
+        if ($purgeLastRun) {
+            $this->logger->purgeLastRun();
+            $result['purged'][] = 'last_run';
+        }
+
+        if ($purgeState) {
+            $this->messageState->purge();
+            $result['purged'][] = 'message_state';
+        }
+
+        if ($purgeCopies) {
+            $copiesDir = ProjectPaths::storage() . DIRECTORY_SEPARATOR . 'cache' . DIRECTORY_SEPARATOR . 'message-copies';
+            if (is_dir($copiesDir)) {
+                $count = 0;
+                foreach (glob($copiesDir . DIRECTORY_SEPARATOR . '*') ?: [] as $file) {
+                    if (is_file($file)) {
+                        unlink($file);
+                        $count++;
+                    }
+                }
+                $result['purged'][] = 'message_copies';
+                $result['message_copies_deleted'] = $count;
+            }
+        }
+
+        $this->logger->info('Storage cleanup performed.', ['purged' => $result['purged']]);
+
+        return $result;
+    }
+
     public function run(array $options = []): array
     {
         $dryRun = !empty($options['dry_run']);

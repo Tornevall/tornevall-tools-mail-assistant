@@ -116,6 +116,8 @@ class MessageStateStore
 
             $mailboxes[(string) $mailboxId] = [
                 'count' => count($visibleMessages),
+                'count_pending' => count($pendingMessages),
+                'count_already_replied' => count($visibleMessages) - count($pendingMessages),
                 'excluded_read_records' => $excludedReadRecords,
                 'raw_count' => count($messages),
                 'status_counts' => $statusCounts,

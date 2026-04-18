@@ -242,7 +242,7 @@ class MailAssistantRunner
                     }
 
                     $this->handleMessage($imap, $mailbox, $rule, $message, $dryRun);
-                    $this->recordMessageState($mailboxSummary, $message, 'handled', 'rule_matched', $dryRun);
+                    $this->recordMessageState($mailboxSummary, $message, 'handled', 'rule_matched_replied', $dryRun);
                     $mailboxSummary['handled']++;
                     $summary['messages_handled']++;
                 }

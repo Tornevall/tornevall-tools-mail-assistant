@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.8 - 2026-04-18
+
+- `message_state` summary now exposes `count_pending` and `count_already_replied` so it is immediately clear how many
+  messages have been replied to vs still need attention — instead of only showing `handled: N` which was ambiguous.
+- Message state reason changed from `rule_matched` to `rule_matched_replied` to make it explicit that a reply was sent.
+
 ## 0.3.7 - 2026-04-18
 
 - Added storage cleanup feature: purge log, last-run summary, message state, and saved message copies in one operation.

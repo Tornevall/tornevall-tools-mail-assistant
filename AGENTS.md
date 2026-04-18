@@ -30,6 +30,9 @@ It is expected to:
 - `src/Runner/MailAssistantRunner.php` - orchestration logic
 - `src/Web/WebApp.php` - env-login dashboard
 - `src/Support/MessageStateStore.php` - persisted local message history under `storage/state/message-state.json`
+- `tests/generic-no-match-json-regression.php` - strict JSON allow/deny parsing coverage for unmatched-mail AI
+- `tests/generic-no-match-runner-regression.php` - runner-level guard that rejected unmatched-mail AI decisions stay unread
+- `tests/bcc-routing-regression.php` - verifies normalized `to` / `cc` / `bcc` relay recipient forwarding
 
 ## Current operator behavior
 
@@ -61,6 +64,7 @@ It is expected to:
 - No-match handling can now be config-gated to try one generic AI fallback reply (`generic_no_match_ai_enabled`) before
   ignoring; that mailbox-level fallback now depends on two separate config fields too: `generic_no_match_if` (when an otherwise unmatched mail may be answered at all) and `generic_no_match_instruction` (how the answer should be written if allowed).
 - The unmatched-mail AI path must require a strict JSON decision and may only send a reply when the model explicitly returns an allow decision with high certainty.
+- If that strict unmatched-mail decision is rejected or is anything below high certainty, any leftover reply payload must be discarded so diagnostics never masquerade as an approved answer.
 - Generic no-match outcome reasons should stay explicit in state/logs: `no_matching_rule_generic_ai_disabled`,
   `no_matching_rule_generic_ai_unconfigured`, `no_matching_rule_generic_ai_rejected`,
   `no_matching_rule_generic_ai_invalid_json`, `no_matching_rule_generic_ai_not_certain`,

@@ -87,7 +87,7 @@ assertSameValue('Confirm receipt, summarize the issue, and ask for any missing t
 assertSameValue('calm', $rulePayload['mood'] ?? null, 'Rule AI request should forward rule mood.');
 assertHasKey('client_name', $rulePayload, 'Rule AI request should still identify the standalone client.');
 
-$client->generateGenericAiReply(
+$client->evaluateGenericNoMatchReply(
     ['name' => 'Fallback mailbox'],
     [
         'from' => 'sender@example.test',
@@ -99,7 +99,8 @@ $client->generateGenericAiReply(
         'spam_assassin' => ['present' => false],
     ],
     [
-        'custom_instruction' => 'Answer politely and ask for missing account details when necessary.',
+        'if_condition' => 'If the email is a routine account question that is safe to answer, we may reply.',
+        'reply_instruction' => 'Answer politely and ask for missing account details when necessary.',
         'ai_model' => 'gpt-4o-mini',
         'ai_reasoning_effort' => 'medium',
     ]
@@ -113,7 +114,15 @@ if (!is_array($genericPayload)) {
 assertSameValue('gpt-4o-mini', $genericPayload['model'] ?? null, 'Generic AI request should forward mailbox-selected model.');
 assertSameValue('medium', $genericPayload['reasoning_effort'] ?? null, 'Generic AI request should forward mailbox-selected reasoning effort.');
 assertSameValue('auto', $genericPayload['response_language'] ?? null, 'Generic AI request should also default to matching the incoming mail language.');
-assertSameValue('Answer politely and ask for missing account details when necessary.', $genericPayload['custom_instruction_override'] ?? null, 'Generic AI request should forward mailbox custom instruction as an override.');
+assertSameValue('Mail Support Assistant', $genericPayload['responder_name_override'] ?? null, 'Generic AI request should identify itself as the cautious unmatched-mail classifier.');
+assertSameValue('Extremely cautious support triage classifier that only returns strict JSON.', $genericPayload['persona_profile_override'] ?? null, 'Generic AI request should force the strict JSON classifier persona.');
+assertSameValue('Return JSON only. Never add commentary, markdown, or code fences unless they still contain exactly one valid JSON object.', $genericPayload['custom_instruction_override'] ?? null, 'Generic AI request should force JSON-only output.');
+if (strpos((string) ($genericPayload['user_prompt'] ?? ''), 'If the email is a routine account question that is safe to answer, we may reply.') === false) {
+    throw new RuntimeException('Generic AI request should embed the mailbox IF-condition in the triage prompt.');
+}
+if (strpos((string) ($genericPayload['user_prompt'] ?? ''), 'Answer politely and ask for missing account details when necessary.') === false) {
+    throw new RuntimeException('Generic AI request should embed the mailbox reply instructions in the triage prompt.');
+}
 
 fwrite(STDOUT, "ai-rule-overrides-regression: ok\n");
 

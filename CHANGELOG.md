@@ -2,11 +2,15 @@
 
 ## 0.3.17 - 2026-04-18
 
+- Reply transports now normalize reply recipients more strictly before SMTP/Tools relay delivery, which hardens BCC forwarding and avoids losing BCC recipients when addresses include display names or combined header formatting.
 - Mailbox-level unmatched-mail AI now uses two separate admin-managed fields from Tools: `generic_no_match_if` for the allow-condition and `generic_no_match_instruction` for the actual reply instructions.
 - The standalone no-match AI path no longer trusts any free-form model reply. It now requires strict JSON from AI and only sends a reply when the decision is explicitly `can_reply=true` with `certainty="high"` and a non-empty `reply` payload.
+- Rejected or non-high-certainty no-match AI decisions now also have their internal reply payload blanked, so diagnostics cannot accidentally look like a usable answer was approved.
 - If the new mailbox-level `generic_no_match_if` field is empty, unmatched-mail AI is treated as unconfigured and no fallback reply is sent.
 - SpamAssassin wrapper prose is still ignored as outer noise during that decision, while SpamAssassin score/tests remain available to the AI as risk signals.
 - Local run/message diagnostics now preserve the no-match AI decision metadata so operators can see why a regelless message was rejected or accepted.
+- Regression coverage now explicitly exercises the strict unmatched-mail JSON contract and verifies that rejected no-match AI decisions stay unread instead of silently mutating IMAP state.
+- Regression coverage now also includes BCC-routing verification for Tools relay delivery, including normalized `to` / `cc` / `bcc` recipient lists.
 
 ## 0.3.16 - 2026-04-18
 

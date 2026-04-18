@@ -189,6 +189,9 @@ class ToolsApiClient
 
         $replyText = trim((string) ($decision['reply'] ?? ''));
         $canReply = !empty($decision['can_reply']) && strtolower((string) ($decision['certainty'] ?? '')) === 'high' && $replyText !== '';
+        if (!$canReply) {
+            $replyText = '';
+        }
         $reasonCode = (string) ($decision['decision_reason_code'] ?? '');
         if ($reasonCode === '') {
             if (empty($decision['valid_json'])) {

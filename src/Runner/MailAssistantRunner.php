@@ -1151,10 +1151,14 @@ class MailAssistantRunner
             $headers[] = 'Bcc: ' . $bcc;
         }
 
+        $resolvedRecipients = $this->resolveReplyRecipients($to, $headers);
+
         if ($dryRun) {
             $this->logger->info('DRY-RUN reply prepared.', [
                 'to' => $to,
                 'subject' => $subject,
+                'cc' => $resolvedRecipients['cc'],
+                'bcc' => $resolvedRecipients['bcc'],
                 'has_html' => !empty($replyContent['html']),
             ]);
             return;
@@ -1175,7 +1179,7 @@ class MailAssistantRunner
             }
 
             try {
-                $this->deliverReplyViaTransport($transport, $mailbox, $rule, $message, $to, $subject, $replyContent, $headers, $attemptIndex === 0);
+                $this->deliverReplyViaTransport($transport, $mailbox, $rule, $message, $to, $subject, $replyContent, $headers, $resolvedRecipients, $attemptIndex === 0);
                 return;
             } catch (Throwable $transportError) {
                 $attemptErrors[] = $transport . ': ' . $transportError->getMessage();
@@ -1192,6 +1196,20 @@ class MailAssistantRunner
         throw new RuntimeException(
             'All configured mail transports failed. ' . implode(' | ', array_values(array_unique($attemptErrors)))
         );
+    }
+
+    private function resolveReplyRecipients(string $to, array $headers): array
+    {
+        $toEmail = $this->extractFirstEmail($to);
+        if ($toEmail === '' && filter_var($to, FILTER_VALIDATE_EMAIL)) {
+            $toEmail = strtolower(trim($to));
+        }
+
+        return [
+            'to' => $toEmail,
+            'cc' => $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Cc')),
+            'bcc' => $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Bcc')),
+        ];
     }
 
     private function buildReplyContent(string $body, array $message = []): array
@@ -1423,7 +1441,7 @@ class MailAssistantRunner
         return count($normalized) ? $normalized : ['smtp'];
     }
 
-    private function deliverReplyViaTransport(string $transport, array $mailbox, array $rule, array $message, string $to, string $subject, array $replyContent, array $headers, bool $isPrimary): void
+    private function deliverReplyViaTransport(string $transport, array $mailbox, array $rule, array $message, string $to, string $subject, array $replyContent, array $headers, array $resolvedRecipients, bool $isPrimary): void
     {
         if ($transport === 'tools_api') {
             $this->sendReplyViaToolsRelay(
@@ -1434,31 +1452,32 @@ class MailAssistantRunner
                 $subject,
                 $replyContent,
                 $headers,
+                $resolvedRecipients,
                 $isPrimary ? 'tools_api_primary' : 'fallback_after_transport_failure'
             );
             return;
         }
 
         if ($transport === 'smtp') {
-            $this->sendReplyViaSmtp($to, $subject, $replyContent, $headers);
-            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'smtp']);
+            $this->sendReplyViaSmtp($to, $subject, $replyContent, $headers, $resolvedRecipients);
+            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'smtp', 'cc' => $resolvedRecipients['cc'], 'bcc' => $resolvedRecipients['bcc']]);
             return;
         }
 
         if ($transport === 'pickup') {
             $this->sendReplyViaPickup($to, $subject, $replyContent, $headers);
-            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'pickup']);
+            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'pickup', 'cc' => $resolvedRecipients['cc'], 'bcc' => $resolvedRecipients['bcc']]);
             return;
         }
 
         if ($transport === 'custom_mta') {
             $this->sendReplyViaCustomMta($to, $subject, $replyContent, $headers);
-            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'custom_mta']);
+            $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'custom_mta', 'cc' => $resolvedRecipients['cc'], 'bcc' => $resolvedRecipients['bcc']]);
             return;
         }
 
         $this->sendReplyViaPhpMail($to, $subject, $replyContent, $headers);
-        $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'php_mail']);
+        $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'php_mail', 'cc' => $resolvedRecipients['cc'], 'bcc' => $resolvedRecipients['bcc']]);
     }
 
     private function sendReplyViaPhpMail(string $to, string $subject, array $replyContent, array $headers): void
@@ -1520,7 +1539,7 @@ class MailAssistantRunner
         }
     }
 
-    private function sendReplyViaSmtp(string $to, string $subject, array $replyContent, array $headers): void
+    private function sendReplyViaSmtp(string $to, string $subject, array $replyContent, array $headers, array $resolvedRecipients): void
     {
         $host = trim((string) Env::get('MAIL_ASSISTANT_SMTP_HOST', ''));
         $port = (int) Env::get('MAIL_ASSISTANT_SMTP_PORT', '587');
@@ -1563,10 +1582,11 @@ class MailAssistantRunner
             throw new RuntimeException('MAIL_ASSISTANT_SMTP_FROM_ENVELOPE is invalid.');
         }
 
+        $primaryRecipient = trim((string) ($resolvedRecipients['to'] ?? ''));
         $envelopeRecipients = array_values(array_unique(array_filter(array_merge(
-            [$to],
-            $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Cc')),
-            $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Bcc'))
+            $primaryRecipient !== '' ? [$primaryRecipient] : [],
+            array_values((array) ($resolvedRecipients['cc'] ?? [])),
+            array_values((array) ($resolvedRecipients['bcc'] ?? []))
         ))));
         if (!count($envelopeRecipients)) {
             throw new RuntimeException('No valid SMTP recipients resolved.');
@@ -1709,6 +1729,7 @@ class MailAssistantRunner
         string $subject,
         array $replyContent,
         array $headers,
+        array $resolvedRecipients,
         string $mode
     ): void {
         $fromHeader = '';
@@ -1719,24 +1740,13 @@ class MailAssistantRunner
             }
         }
 
-        $cc = [];
-        $bcc = [];
-        foreach ($headers as $header) {
-            if (stripos($header, 'Cc:') === 0) {
-                $cc[] = trim(substr($header, 3));
-            }
-            if (stripos($header, 'Bcc:') === 0) {
-                $bcc[] = trim(substr($header, 4));
-            }
-        }
-
         $this->tools->sendReplyViaTools([
             'mailbox_id' => (int) ($mailbox['id'] ?? 0),
             'rule_id' => (int) ($rule['id'] ?? 0),
             'mode' => $mode,
-            'to' => $to,
-            'cc' => array_values(array_filter($cc)),
-            'bcc' => array_values(array_filter($bcc)),
+            'to' => trim((string) (($resolvedRecipients['to'] ?? null) ?: $to)),
+            'cc' => array_values(array_filter((array) ($resolvedRecipients['cc'] ?? []))),
+            'bcc' => array_values(array_filter((array) ($resolvedRecipients['bcc'] ?? []))),
             'from' => $fromHeader,
             'subject' => $subject,
             'body' => (string) ($replyContent['text'] ?? ''),
@@ -1750,7 +1760,14 @@ class MailAssistantRunner
             ],
         ]);
 
-        $this->logger->info('Reply sent.', ['to' => $to, 'subject' => $subject, 'transport' => 'tools_api', 'mode' => $mode]);
+        $this->logger->info('Reply sent.', [
+            'to' => $to,
+            'subject' => $subject,
+            'transport' => 'tools_api',
+            'mode' => $mode,
+            'cc' => $resolvedRecipients['cc'] ?? [],
+            'bcc' => $resolvedRecipients['bcc'] ?? [],
+        ]);
     }
 }
 

@@ -98,7 +98,7 @@ $config = [
             [
                 'id' => 1,
                 'name' => 'Generic Gmail rule',
-                'sort_order' => 0,
+                'sort_order' => 50,
                 'match' => [
                     'from_contains' => 'gmail.com',
                     'to_contains' => '',
@@ -116,7 +116,7 @@ $config = [
             [
                 'id' => 2,
                 'name' => 'Copyright notice rule',
-                'sort_order' => 99,
+                'sort_order' => 0,
                 'match' => [
                     'from_contains' => '',
                     'to_contains' => '',
@@ -161,7 +161,7 @@ if (!is_array($record)) {
 }
 
 assertSameValue(2, $record['matching_rule_count'] ?? null, 'Both overlapping rules should be recorded as matches.');
-assertSameValue('Copyright notice rule', $record['selected_rule']['name'] ?? null, 'The more specific rule should win even with a worse sort order.');
+assertSameValue('Copyright notice rule', $record['selected_rule']['name'] ?? null, 'The higher-priority rule should win when sort_order says it is more important.');
 assertTrueValue(count((array) ($record['matching_rules'] ?? [])) === 2, 'Matching-rule diagnostics should list both candidates.');
 assertSameValue('Generic Gmail rule', $record['matching_rules'][1]['name'] ?? null, 'The lower-specificity Gmail rule should still be visible as a secondary candidate.');
 

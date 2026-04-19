@@ -2,7 +2,7 @@
 
 Project-local guide for `projects/tornevall-tools-mail-assistant`.
 
-Last synchronized: 2026-04-18
+Last synchronized: 2026-04-19
 
 ## Purpose
 
@@ -34,6 +34,10 @@ It is expected to:
 - `tests/generic-no-match-runner-regression.php` - runner-level guard that rejected unmatched-mail AI decisions stay unread
 - `tests/bcc-routing-regression.php` - verifies normalized `to` / `cc` / `bcc` relay recipient forwarding
 - `tests/default-bcc-env-regression.php` - verifies `.env` fallback BCC behavior when config BCC values are empty
+- `tests/reply-disabled-unread-regression.php` - verifies matched rules with `reply.enabled=false` stay unread by default
+- `tests/rule-context-priority-regression.php` - verifies contextual subject matches outrank generic sender matches when explicit priority is tied
+- `tests/ai-instruction-compliance-regression.php` - verifies obviously contradictory AI replies are rejected against strict redirect/no-responsibility instructions
+- `tests/body-only-no-summary-regression.php` - verifies `write only the email body` instructions suppress the appended request-summary block
 
 ## Current operator behavior
 
@@ -59,9 +63,11 @@ It is expected to:
   styled HTML body so ordinary mail clients see a formatted support reply instead of raw plain text.
 - No-match skips should be logged explicitly with mailbox/from/to/subject metadata so operators can diagnose `scanned` +
   `skipped` runs without reverse-engineering IMAP content.
-- Rule collisions are now first-class diagnostics too: the runner should evaluate all matching rules, choose the most
-  specific winner deterministically, and record both the winning rule and the competing matches so operators can see why
-  one rule won over another.
+- Rule collisions are now first-class diagnostics too: the runner should evaluate all matching rules, choose the winner
+  deterministically, and record both the winning rule and the competing matches so operators can see why one rule won
+  over another.
+- Winner selection order is now: lower `sort_order` first (explicit operator priority), then more contextual match
+  types (`subject` / `body` before generic `from`), then more active match fields, then longer combined match text.
 - No-match handling can now be config-gated to try one generic AI fallback reply (`generic_no_match_ai_enabled`) before
   ignoring; that mailbox-level fallback now depends on two separate config fields too: `generic_no_match_if` (when an otherwise unmatched mail may be answered at all) and `generic_no_match_instruction` (how the answer should be written if allowed).
 - The unmatched-mail AI path must require a strict JSON decision and may only send a reply when the model explicitly returns an allow decision with high certainty.
@@ -84,9 +90,20 @@ It is expected to:
 - No-match mails must stay untouched.
 - The same personal token is used both to fetch config and, when enabled, to call Tools-hosted AI.
 - For matched rules with `ai_enabled=true`, the standalone client must treat the rule's responder/persona/custom instruction/model/reasoning values as authoritative AI override inputs for that single Tools AI request.
+- If a matched rule instruction explicitly requires a language such as English, the standalone client should convert that
+  into a real `response_language` override rather than hoping the model infers it from prose alone.
+- If a footer/signature is configured locally, AI prompts should tell the model not to invent a second closing/signature
+  block on its own.
+- For critical redirect/disclaimer instructions, the standalone client should also validate the returned AI text locally
+  before send and reject replies that obviously violate explicit language requirements, omit required redirect addresses,
+  skip mandatory “must state” facts, or wrongly claim responsibility/handling.
+- If the instruction explicitly says to write only the email body, the standalone client should not append its usual
+  original-request summary block afterward.
 - Temporary AI throttle failures (for example `429 / Too Many Attempts`) should be retried before the standalone client gives up on a matched rule's AI reply.
 - Empty AI responses should also trigger the fallback model path; fallback is not only for thrown HTTP/API exceptions.
 - If an AI-enabled matched rule still fails after retries and no explicit `template_text` fallback is configured, do not send the old generic canned sentence; abort/log that reply instead of pretending the issue was handled.
+- If a rule matches but no outgoing reply is actually sent, the default-safe behavior is to leave the message unread and
+  untouched unless the config explicitly opts into post-handle mutation without reply.
 - Mailbox-level `generic_no_match_*` AI settings are only for the unmatched-mail fallback path and must not replace matched rule AI overrides.
 - Outer SpamAssassin wrapper prose may be ignored for unmatched-mail AI classification, but SpamAssassin score/tests should still be available as safety/risk hints.
 - Outgoing replies now support `smtp` (default), `php_mail`, `custom_mta`, and `tools_api` transports (

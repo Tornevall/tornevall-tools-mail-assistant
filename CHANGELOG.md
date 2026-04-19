@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.3.18 - 2026-04-19
+
+- Matched-rule AI requests now harden language obedience: explicit rule instructions such as "reply in English" are promoted into an actual request-language override instead of relying only on free-form prompt interpretation.
+- Matched-rule AI prompts are now stricter about operator intent overall: authoritative custom instructions are treated as the highest-priority constraint, and the model is explicitly told not to add its own closing/signature when the standalone footer will be appended separately.
+- Rule-collision winner selection now treats lower `sort_order` as the explicit operator priority, and when priorities are tied it prefers more contextual matches (`subject` / `body`) over broad sender-only matches.
+- Messages that match a rule but do not actually send a reply (`reply.enabled=false`) now stay unread by default instead of being silently marked seen/moved/deleted as though an outgoing reply had been delivered.
+- Reply recipient parsing is now more tolerant of semicolon-separated and line-wrapped CC/BCC address lists, which improves copied-recipient preservation in both SMTP envelope handling and Tools relay payloads.
+- Returned AI text is now locally validated against critical operator instructions before send: obvious violations such as replying in Swedish despite an English-only rule, omitting required redirect addresses, missing required “must state” redirect facts, or claiming responsibility/handling despite a redirect-only instruction now abort the reply instead of sending a contradictory mail.
+- Rules that explicitly say “write only the email body” now suppress the appended original-request summary block so the outgoing message body stays body-only.
+- Added regression coverage for explicit English AI enforcement, tied-priority contextual rule selection, explicit unread preservation when no reply is sent, stricter redirect-instruction compliance, and body-only summary suppression.
+
 ## 0.3.17 - 2026-04-18
 
 - Standalone replies can now fall back to `MAIL_ASSISTANT_DEFAULT_BCC` from `.env` when neither the matched rule nor the mailbox defaults define any BCC recipient.

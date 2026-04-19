@@ -111,7 +111,7 @@ php run --limit=10 >> storage/logs/cron.log 2>&1
 Rules can decide per message whether AI is enabled.
 
 - If several rules match the same email, the standalone client now evaluates **all matching rules** before choosing one winner.
-- Winner selection is deterministic: most active match fields wins first, then longer combined match text, then lower `sort_order` as the final tie-breaker.
+- Winner selection is deterministic: lower `sort_order` wins first (explicit operator priority), and when priorities are tied the runner prefers more contextual matches (`subject` / `body` before generic sender matches), then more active match fields, then longer combined match text.
 - The selected rule and all competing matches are now recorded in local run/message-state diagnostics so collisions such as a broad Gmail rule vs a more specific copyright rule are visible afterwards.
 
 - If a rule has `ai_enabled=false`, the client uses the static template text only.
@@ -120,12 +120,15 @@ Rules can decide per message whether AI is enabled.
 - AI requests now default to a primary model (`gpt-5.4`) and retry once with a fallback model (`o4`) if the primary call fails **or** if the primary request returns an empty reply body.
 - Rate-limited AI failures (`429` / Too Many Attempts) are now retried automatically by the standalone client before it gives up on the AI path.
 - Reasoning effort is still configurable (`MAIL_ASSISTANT_AI_REASONING_EFFORT`, default `medium`), but the standalone fallback path now intentionally omits reasoning metadata when it retries through `o4`.
-- AI requests now explicitly ask Tools to answer in the same language as the incoming email by default (`response_language=auto`).
+- AI requests now default to the incoming sender language (`response_language=auto`), but explicit rule instructions such as **"reply in English"** are now promoted into a hard request-language override instead of being left as loose prose.
+- AI prompts are now stricter overall: authoritative rule instructions are treated as highest priority, and the model is explicitly told not to joke, improvise company facts, or invent a separate sign-off/signature when the runner will append the footer itself.
+- The standalone runner now also performs a local compliance check on returned AI text for critical instructions: if the generated reply violates an explicit English-only requirement, omits required redirect addresses, skips required “must state” facts, or claims responsibility/handling where the instruction says the notice should only be redirected, the reply is rejected instead of being sent.
 - Message bodies are now sanitized more aggressively before they are sent as AI request summary context: HTML/MIME noise, SpamAssassin wrapper text, forwarded `.eml` header dumps, and malformed embedded header blocks are stripped first so the actual original request survives.
 - Reply-aware message parsing now strips common quoted history blocks before rule matching and AI summary generation, so follow-up emails in an existing thread can still match the intended support rule.
 - The token owner still needs approved `provider_openai` access in Tools unless that user is admin.
 - Outgoing replies are now sent as `multipart/alternative`: a plain-text part is kept for compatibility, while the visible mail is also rendered as a small styled HTML card for more polished support replies.
 - Outgoing replies now also append a compact excerpt of the original request, so the sent answer itself still shows what the user actually wrote even when the incoming mail was a malformed forwarded wrapper.
+- Exception: if the rule instruction explicitly says to **write only the email body**, the standalone runner now suppresses that appended request-summary block so the final sent body stays closer to the operator's exact instruction.
 - AI-enabled rules no longer fall back to the hardcoded generic sentence `Thank you for your message. We have reviewed it.` unless you explicitly configured a `template_text` fallback for that rule. If AI fails and no explicit template exists, the reply is aborted and the error is logged instead of sending a misleading canned answer.
 - Mailbox run errors for failed AI replies now also include which model(s) were tried, making empty-response or fallback-path failures easier to diagnose.
 
@@ -151,6 +154,7 @@ Rules can decide per message whether AI is enabled.
 
 - Unmatched mail is left untouched.
 - If a message is skipped because no rule matches or the generic no-match fallback is disabled, unanswerable, or fails, it now stays unread even when `mark_seen_on_skip` is enabled.
+- If a rule matches but `reply.enabled=false`, the message now also stays unread by default instead of being silently marked seen/moved/deleted as if a reply had actually been sent.
 - `mark_seen_on_skip` now only applies to deliberate heuristic skips such as high-score SpamAssassin junk, not to configuration-driven no-match cases.
 - Cron/manual execution only polls unread mail. Already-read mail is skipped immediately.
 - Unread mail may be reprocessed on later runs even if the same `Message-Id` already exists in local history; the local state file is now diagnostic history only and is no longer used as a dedupe gate.
@@ -179,5 +183,6 @@ Rules can decide per message whether AI is enabled.
 - SMTP is now more forgiving when optional override keys are left blank: empty `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, and `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE` automatically fall back to sensible defaults instead of being treated as invalid configuration.
 - In practice, `MAIL_ASSISTANT_SMTP_HOST` plus the usual `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_USERNAME`, and `MAIL_ASSISTANT_SMTP_PASSWORD` are enough for most authenticated SMTP setups.
 - If neither a matched rule nor the mailbox defaults define a BCC recipient, the standalone runtime can now fall back to `MAIL_ASSISTANT_DEFAULT_BCC` from `.env`.
+- CC/BCC parsing is now more tolerant of semicolon-separated or line-wrapped address lists, which helps preserve copied recipients even when mailbox config or relay headers are formatted less strictly.
 - Tools relay requires a dedicated personal token (`provider_mail_support_assistant_mailer`) and the `mail-support-assistant.relay` permission for the token owner (admin bypass still applies); the relay payload can now include both `body` and additive `body_html`.
 

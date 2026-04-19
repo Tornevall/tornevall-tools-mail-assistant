@@ -49,14 +49,19 @@ function assertHasKey(string $key, array $payload, string $message): void
 $client = new CapturingToolsApiClient();
 
 $client->generateAiReply(
-    ['name' => 'Primary mailbox'],
+    [
+        'name' => 'Primary mailbox',
+        'defaults' => [
+            'footer' => 'Kind regards,\nTornevall Support',
+        ],
+    ],
     [
         'reply' => [
             'ai_model' => 'gpt-5.4',
             'ai_reasoning_effort' => 'high',
             'responder_name' => 'Thomas',
             'persona_profile' => 'Calm and factual support responder.',
-            'custom_instruction' => 'Confirm receipt, summarize the issue, and ask for any missing ticket number.',
+            'custom_instruction' => 'Reply in English. Confirm receipt, summarize the issue, and ask for any missing ticket number.',
             'mood' => 'calm',
         ],
     ],
@@ -80,12 +85,18 @@ assertSameValue('POST', $client->requests[0]['method'], 'Rule AI request should 
 assertSameValue('/ai/socialgpt/respond', $client->requests[0]['path'], 'Rule AI request should target the Tools SocialGPT endpoint.');
 assertSameValue('gpt-5.4', $rulePayload['model'] ?? null, 'Rule AI request should prefer the rule-selected model.');
 assertSameValue('high', $rulePayload['reasoning_effort'] ?? null, 'Rule AI request should forward per-rule reasoning effort.');
-assertSameValue('auto', $rulePayload['response_language'] ?? null, 'Rule AI request should default to matching the incoming mail language.');
+assertSameValue('en', $rulePayload['response_language'] ?? null, 'Rule AI request should force English when the authoritative instruction says to reply in English.');
 assertSameValue('Thomas', $rulePayload['responder_name_override'] ?? null, 'Rule AI request should forward responder override.');
 assertSameValue('Calm and factual support responder.', $rulePayload['persona_profile_override'] ?? null, 'Rule AI request should forward persona override.');
-assertSameValue('Confirm receipt, summarize the issue, and ask for any missing ticket number.', $rulePayload['custom_instruction_override'] ?? null, 'Rule AI request should forward custom instruction override.');
+assertSameValue('Reply in English. Confirm receipt, summarize the issue, and ask for any missing ticket number.', $rulePayload['custom_instruction_override'] ?? null, 'Rule AI request should forward custom instruction override.');
 assertSameValue('calm', $rulePayload['mood'] ?? null, 'Rule AI request should forward rule mood.');
 assertHasKey('client_name', $rulePayload, 'Rule AI request should still identify the standalone client.');
+if (strpos((string) ($rulePayload['user_prompt'] ?? ''), 'Write the reply body in English only') === false) {
+    throw new RuntimeException('Rule AI request should harden the prompt with the explicit English language requirement.');
+}
+if (strpos((string) ($rulePayload['user_prompt'] ?? ''), 'Do not add a closing signature') === false) {
+    throw new RuntimeException('Rule AI request should tell the model not to invent a separate sign-off when a footer is configured.');
+}
 
 $client->evaluateGenericNoMatchReply(
     ['name' => 'Fallback mailbox'],

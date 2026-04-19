@@ -80,7 +80,25 @@ class ToolsApiClient
         $responderName = trim((string) (($reply['responder_name'] ?? null) ?: ''));
         $personaProfile = trim((string) (($reply['persona_profile'] ?? null) ?: ''));
         $mood = trim((string) (($reply['mood'] ?? null) ?: ''));
-        $userPrompt = 'Reply helpfully to this support email. Use the same language as the incoming email unless the sender explicitly asks for another language.';
+        $languageDirective = $this->resolveReplyLanguageDirective($mailbox, $rule, $message, $customInstruction);
+        $footerConfigured = trim((string) (($reply['footer_text'] ?? null) ?: (($mailbox['defaults']['footer'] ?? null) ?: ''))) !== '';
+        $userPromptLines = [
+            'HIGHEST PRIORITY: follow the authoritative rule instruction exactly.',
+            $this->buildReplyLanguageInstruction($languageDirective),
+            'Reply helpfully, professionally, and factually to this support email.',
+            'Do not joke, do not use sarcasm, and do not improvise company facts.',
+            'Do not claim actions have been completed unless the email context clearly supports that claim.',
+        ];
+        if ($footerConfigured) {
+            $userPromptLines[] = 'Do not add a closing signature, greeting footer, or company-name sign-off. The system appends the final footer separately.';
+        }
+        if ($responderName === '') {
+            $userPromptLines[] = 'Do not include placeholder text like "[Your Name]" or "Your Name". Only use actual configured names or leave the signature blank.';
+        }
+        if ($customInstruction !== '') {
+            $userPromptLines[] = 'Authoritative rule instruction: ' . $customInstruction;
+        }
+        $userPrompt = implode("\n", $userPromptLines);
 
         $payload = [
             'context' => trim(implode("\n", $contextLines)),
@@ -88,7 +106,7 @@ class ToolsApiClient
             'modifier' => 'short',
             'model' => $primaryModel,
             'request_mode' => 'reply',
-            'response_language' => 'auto',
+            'response_language' => $languageDirective['response_language'],
             'client_name' => 'Tornevall Tools Mail Assistant',
             'client_version' => self::CLIENT_VERSION,
             'client_platform' => 'php_standalone',
@@ -130,6 +148,7 @@ class ToolsApiClient
             ];
         }
 
+        $genericLanguageDirective = $this->resolveGenericNoMatchLanguageDirective($mailbox, $replyInstruction, $message);
         $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
         $cleanBody = $this->buildIncomingMessageExcerpt($message, 2600);
         $userPrompt = implode("\n", [
@@ -141,8 +160,12 @@ class ToolsApiClient
             '- Only allow a reply when the email clearly matches the admin IF condition below.',
             '- If the mail looks like spam, scam, fraud, phishing, unsolicited sales, unsolicited collaboration outreach, vague marketing, or anything outside the IF condition, set can_reply=false.',
             '- If there is any uncertainty, missing context, or safety doubt, set can_reply=false.',
-            '- Only set can_reply=true when you are fully confident. In that case certainty must be "high" and reply must already be written in the original sender language from the email itself.',
+            '- Only set can_reply=true when you are fully confident. In that case certainty must be "high" and reply must already follow the reply-language requirement below.',
             '- When can_reply=false, reply must be an empty string.',
+            '- Do not add extra closing signatures or footer text; the system appends final sender details separately when needed.',
+            '',
+            'Reply-language requirement:',
+            $this->buildReplyLanguageInstruction($genericLanguageDirective),
             '',
             'Admin IF condition:',
             $ifCondition,
@@ -174,7 +197,7 @@ class ToolsApiClient
             'modifier' => 'short',
             'model' => $primaryModel,
             'request_mode' => 'reply',
-            'response_language' => 'auto',
+            'response_language' => $genericLanguageDirective['response_language'],
             'responder_name_override' => 'Mail Support Assistant',
             'persona_profile_override' => 'Extremely cautious support triage classifier that only returns strict JSON.',
             'custom_instruction_override' => 'Return JSON only. Never add commentary, markdown, or code fences unless they still contain exactly one valid JSON object.',
@@ -565,6 +588,147 @@ class ToolsApiClient
         }
 
         return in_array($value, ['none', 'low', 'medium', 'high', 'xhigh'], true) ? $value : null;
+    }
+
+    private function resolveReplyLanguageDirective(array $mailbox, array $rule, array $message, string $customInstruction = ''): array
+    {
+        $reply = (array) ($rule['reply'] ?? []);
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+
+        $explicitCandidates = [
+            $reply['response_language'] ?? null,
+            $reply['reply_language'] ?? null,
+            $reply['language'] ?? null,
+            $defaults['response_language'] ?? null,
+            $defaults['reply_language'] ?? null,
+            $defaults['language'] ?? null,
+            Env::get('MAIL_ASSISTANT_REPLY_LANGUAGE', ''),
+            Env::get('MAIL_ASSISTANT_RESPONSE_LANGUAGE', ''),
+        ];
+
+        foreach ($explicitCandidates as $candidate) {
+            $normalized = $this->normalizeResponseLanguage($candidate);
+            if ($normalized !== null) {
+                return $this->buildLanguageDirective($normalized);
+            }
+        }
+
+        $detected = $this->detectLanguageDirectiveFromText(implode("\n", array_filter([
+            $customInstruction,
+            (string) ($reply['persona_profile'] ?? ''),
+            (string) ($reply['mood'] ?? ''),
+        ], static function ($value): bool {
+            return trim((string) $value) !== '';
+        })));
+
+        if ($detected !== null) {
+            return $this->buildLanguageDirective($detected);
+        }
+
+        return $this->buildLanguageDirective('auto');
+    }
+
+    private function resolveGenericNoMatchLanguageDirective(array $mailbox, string $replyInstruction, array $message): array
+    {
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+        $explicitCandidates = [
+            $defaults['generic_no_match_response_language'] ?? null,
+            $defaults['generic_no_match_reply_language'] ?? null,
+            $defaults['generic_no_match_language'] ?? null,
+            $defaults['response_language'] ?? null,
+            $defaults['reply_language'] ?? null,
+            Env::get('MAIL_ASSISTANT_GENERIC_REPLY_LANGUAGE', ''),
+        ];
+
+        foreach ($explicitCandidates as $candidate) {
+            $normalized = $this->normalizeResponseLanguage($candidate);
+            if ($normalized !== null) {
+                return $this->buildLanguageDirective($normalized);
+            }
+        }
+
+        $detected = $this->detectLanguageDirectiveFromText($replyInstruction);
+        if ($detected !== null) {
+            return $this->buildLanguageDirective($detected);
+        }
+
+        return $this->buildLanguageDirective('auto');
+    }
+
+    private function normalizeResponseLanguage($value): ?string
+    {
+        $normalized = strtolower(trim((string) $value));
+        if ($normalized === '') {
+            return null;
+        }
+
+        $map = [
+            'auto' => 'auto',
+            'same' => 'auto',
+            'same-language' => 'auto',
+            'same_language' => 'auto',
+            'original-language' => 'auto',
+            'original_language' => 'auto',
+            'sender-language' => 'auto',
+            'sender_language' => 'auto',
+            'english' => 'en',
+            'engelska' => 'en',
+            'en' => 'en',
+            'en-gb' => 'en',
+            'en-us' => 'en',
+            'swedish' => 'sv',
+            'svenska' => 'sv',
+            'sv' => 'sv',
+        ];
+
+        return $map[$normalized] ?? null;
+    }
+
+    private function detectLanguageDirectiveFromText(string $text): ?string
+    {
+        $normalized = strtolower(trim(preg_replace('/\s+/u', ' ', $text) ?? $text));
+        if ($normalized === '') {
+            return null;
+        }
+
+        if (preg_match('/\b(same language|same-language|same language as the incoming email|same language as the sender|original language|reply in the sender\'s language|samma språk|samma språk som avsändaren|samma språk som mailet|originalspråk)\b/u', $normalized) === 1) {
+            return 'auto';
+        }
+
+        if (preg_match('/\b(reply|respond|write|answer)\b[^.\n]{0,40}\b(in english|på engelska|english only|engelska)\b/u', $normalized) === 1
+            || preg_match('/\b(in english|på engelska|english only|engelska)\b/u', $normalized) === 1) {
+            return 'en';
+        }
+
+        if (preg_match('/\b(reply|respond|write|answer)\b[^.\n]{0,40}\b(in swedish|på svenska|swedish only|svenska)\b/u', $normalized) === 1
+            || preg_match('/\b(in swedish|på svenska|swedish only|svenska)\b/u', $normalized) === 1) {
+            return 'sv';
+        }
+
+        return null;
+    }
+
+    private function buildLanguageDirective(string $responseLanguage): array
+    {
+        $responseLanguage = $responseLanguage !== '' ? $responseLanguage : 'auto';
+
+        return [
+            'response_language' => $responseLanguage,
+            'instruction' => $this->buildReplyLanguageInstruction(['response_language' => $responseLanguage]),
+        ];
+    }
+
+    private function buildReplyLanguageInstruction(array $directive): string
+    {
+        $responseLanguage = strtolower(trim((string) ($directive['response_language'] ?? 'auto')));
+        if ($responseLanguage === 'en') {
+            return 'Write the reply body in English only unless the sender explicitly requests another language.';
+        }
+        if ($responseLanguage === 'sv') {
+            return 'Write the reply body in Swedish only unless the sender explicitly requests another language.';
+        }
+
+        return 'Write the reply body in the same language as the incoming email unless the sender explicitly requests another language.';
     }
 
     public function request(string $method, string $path, ?array $payload = null, ?string $tokenOverride = null): array

@@ -51,6 +51,22 @@ $runner = new MailAssistantRunner(
     new MessageStateStore(makeTempPath('mail-assistant-state', '.json'))
 );
 
+$resolveRecipients = new ReflectionMethod(MailAssistantRunner::class, 'resolveReplyRecipients');
+$resolveRecipients->setAccessible(true);
+$resolvedRecipients = $resolveRecipients->invoke(
+    $runner,
+    'Sender Name <sender@example.test>',
+    [
+        'From: Support Team <support@example.test>',
+        'Cc: Team One <team1@example.test>; team2@example.test',
+        "Bcc: Audit One <audit1@example.test>;\r\n audit2@example.test",
+    ]
+);
+
+if (!is_array($resolvedRecipients)) {
+    throw new RuntimeException('Expected normalized recipients to be returned.');
+}
+
 $method = new ReflectionMethod(MailAssistantRunner::class, 'sendReplyViaToolsRelay');
 $method->setAccessible(true);
 $method->invoke(
@@ -69,14 +85,10 @@ $method->invoke(
     ['text' => 'Reply text', 'html' => '<p>Reply text</p>'],
     [
         'From: Support Team <support@example.test>',
-        'Cc: Team One <team1@example.test>, team2@example.test',
-        'Bcc: Audit One <audit1@example.test>, audit2@example.test',
+        'Cc: Team One <team1@example.test>; team2@example.test',
+        "Bcc: Audit One <audit1@example.test>;\r\n audit2@example.test",
     ],
-    [
-        'to' => 'sender@example.test',
-        'cc' => ['team1@example.test', 'team2@example.test'],
-        'bcc' => ['audit1@example.test', 'audit2@example.test'],
-    ],
+    $resolvedRecipients,
     'tools_api_primary'
 );
 

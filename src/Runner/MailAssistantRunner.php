@@ -230,6 +230,9 @@ class MailAssistantRunner
                             $summary['spamassassin_copies_saved']++;
                         }
 
+                        // Normalize subject: remove configured prefixes
+                        $message['subject'] = $this->normalizeSubjectLine($message['subject'], $mailbox);
+
                         if (!empty($spamDecision['skip'])) {
                             $mailboxSummary['skipped']++;
                             $mailboxSummary['spamassassin_skipped']++;
@@ -320,7 +323,7 @@ class MailAssistantRunner
                             }, $ruleMatches);
 
                             if (count($ruleMatches) > 1) {
-                                $this->logger->warning('Multiple rules matched the same message; selected the most specific rule.', [
+                                $this->logger->warning('Multiple rules matched the same message; selected the highest-priority winner.', [
                                     'mailbox' => $mailbox['name'] ?? null,
                                     'uid' => $message['uid'] ?? null,
                                     'message_id' => $message['message_id'] ?? null,
@@ -337,9 +340,39 @@ class MailAssistantRunner
                             }
 
                             $handleResult = $this->handleMessage($imap, $mailbox, $selectedRule, $message, $dryRun);
+                            if (empty($handleResult['handled'])) {
+                                $mailboxSummary['skipped']++;
+                                $summary['messages_skipped']++;
+                                $skipReason = (string) ($handleResult['reason'] ?? 'rule_matched_reply_not_sent');
+                                $this->recordMessageState($mailboxSummary, $message, 'ignored', $skipReason, $dryRun, [
+                                    'matching_rule_count' => count($matchingRuleSummaries),
+                                    'matching_rules' => $matchingRuleSummaries,
+                                    'selected_rule' => $selectedRuleSummary,
+                                    'post_handle_warning' => (string) ($handleResult['post_handle_warning'] ?? ''),
+                                    'post_handle_action' => (string) ($handleResult['post_handle_action'] ?? ''),
+                                    'reply_sent' => false,
+                                ]);
+                                $this->recordMessageResult($mailboxSummary, $message, 'skipped', $skipReason, [
+                                    'matching_rule_count' => count($matchingRuleSummaries),
+                                    'matching_rules' => $matchingRuleSummaries,
+                                    'selected_rule' => $selectedRuleSummary,
+                                    'post_handle_warning' => (string) ($handleResult['post_handle_warning'] ?? ''),
+                                    'post_handle_action' => (string) ($handleResult['post_handle_action'] ?? ''),
+                                    'reply_sent' => false,
+                                ]);
+                                $this->logger->warning('Message matched a rule, but no reply was sent so the message was intentionally left unread.', [
+                                    'mailbox' => $mailbox['name'] ?? null,
+                                    'uid' => $message['uid'] ?? null,
+                                    'message_id' => $message['message_id'] ?? null,
+                                    'selected_rule' => $selectedRuleSummary,
+                                    'reason' => $skipReason,
+                                ]);
+                                continue;
+                            }
+
                             $handledReasonBase = !empty($handleResult['reply_sent'])
                                 ? 'rule_matched_replied'
-                                : 'rule_matched_processed';
+                                : 'rule_matched_processed_without_reply';
                             $handledReason = !empty($handleResult['post_handle_warning'])
                                 ? ($handledReasonBase . '_imap_finalize_failed')
                                 : $handledReasonBase;
@@ -474,6 +507,16 @@ class MailAssistantRunner
         }
 
         usort($matches, function (array $left, array $right): int {
+            $sortDiff = ((int) (($left['rule']['sort_order'] ?? 0))) <=> ((int) (($right['rule']['sort_order'] ?? 0)));
+            if ($sortDiff !== 0) {
+                return $sortDiff;
+            }
+
+            $priorityDiff = ((int) ($right['match_priority_score'] ?? 0)) <=> ((int) ($left['match_priority_score'] ?? 0));
+            if ($priorityDiff !== 0) {
+                return $priorityDiff;
+            }
+
             $criteriaDiff = ((int) ($right['active_criteria_count'] ?? 0)) <=> ((int) ($left['active_criteria_count'] ?? 0));
             if ($criteriaDiff !== 0) {
                 return $criteriaDiff;
@@ -482,11 +525,6 @@ class MailAssistantRunner
             $lengthDiff = ((int) ($right['specificity_length'] ?? 0)) <=> ((int) ($left['specificity_length'] ?? 0));
             if ($lengthDiff !== 0) {
                 return $lengthDiff;
-            }
-
-            $sortDiff = ((int) (($left['rule']['sort_order'] ?? 0))) <=> ((int) (($right['rule']['sort_order'] ?? 0)));
-            if ($sortDiff !== 0) {
-                return $sortDiff;
             }
 
             return ((int) (($left['rule']['id'] ?? 0))) <=> ((int) (($right['rule']['id'] ?? 0)));
@@ -512,6 +550,13 @@ class MailAssistantRunner
         $matchedFields = [];
         $criteriaCount = 0;
         $specificityLength = 0;
+        $matchPriorityScore = 0;
+        $fieldPriorityWeights = [
+            'subject_contains' => 400,
+            'body_contains' => 300,
+            'to_contains' => 200,
+            'from_contains' => 100,
+        ];
 
         foreach ($configuredFields as $field => $needle) {
             $needle = trim($needle);
@@ -530,6 +575,7 @@ class MailAssistantRunner
             }
 
             $matchedFields[$field] = $needle;
+            $matchPriorityScore += (int) ($fieldPriorityWeights[$field] ?? 0);
         }
 
         return [
@@ -538,6 +584,7 @@ class MailAssistantRunner
             'matched_fields' => $matchedFields,
             'active_criteria_count' => $criteriaCount,
             'specificity_length' => $specificityLength,
+            'match_priority_score' => $matchPriorityScore,
         ];
     }
 
@@ -549,6 +596,7 @@ class MailAssistantRunner
             'id' => (int) ($rule['id'] ?? 0),
             'name' => (string) ($rule['name'] ?? ''),
             'sort_order' => (int) ($rule['sort_order'] ?? 0),
+            'match_priority_score' => (int) ($match['match_priority_score'] ?? 0),
             'active_criteria_count' => (int) ($match['active_criteria_count'] ?? 0),
             'specificity_length' => (int) ($match['specificity_length'] ?? 0),
             'matched_fields' => (array) ($match['matched_fields'] ?? []),
@@ -829,11 +877,49 @@ class MailAssistantRunner
             $replySent = true;
         }
 
+        if (!$replySent && !$this->shouldFinalizeWithoutReply($mailbox, $rule)) {
+            return [
+                'handled' => false,
+                'reason' => 'rule_matched_reply_not_sent',
+                'post_handle_action' => 'none',
+                'post_handle_warning' => '',
+                'reply_sent' => false,
+            ];
+        }
+
         $postHandle = (array) ($rule['post_handle'] ?? []);
         $finalizeResult = $this->finalizeHandledMessage($imap, $message, $dryRun, $postHandle);
         $finalizeResult['reply_sent'] = $replySent;
+        $finalizeResult['handled'] = true;
+        $finalizeResult['reason'] = $replySent
+            ? 'rule_matched_replied'
+            : 'rule_matched_processed_without_reply';
 
         return $finalizeResult;
+    }
+
+    private function shouldFinalizeWithoutReply(array $mailbox, array $rule): bool
+    {
+        $postHandle = (array) ($rule['post_handle'] ?? []);
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+
+        $candidates = [
+            $postHandle['apply_without_reply'] ?? null,
+            $postHandle['allow_without_reply'] ?? null,
+            $postHandle['finalize_without_reply'] ?? null,
+            $defaults['apply_without_reply'] ?? null,
+            $defaults['allow_without_reply'] ?? null,
+            $defaults['finalize_without_reply'] ?? null,
+        ];
+
+        foreach ($candidates as $candidate) {
+            $parsed = $this->toNullableBool($candidate);
+            if ($parsed !== null) {
+                return $parsed;
+            }
+        }
+
+        return Env::bool('MAIL_ASSISTANT_FINALIZE_WITHOUT_REPLY', false);
     }
 
     private function finalizeHandledMessage(ImapMailboxClient $imap, array $message, bool $dryRun, array $postHandle = []): array
@@ -908,6 +994,16 @@ class MailAssistantRunner
                 $aiResult = $this->tools->generateAiReply($mailbox, $rule, $message);
                 $text = trim((string) ($aiResult['response'] ?? ''));
                 $lastAiModelTrail = $this->describeAiModelTrailFromResult($aiResult, $lastAiModelTrail);
+                $instructionViolation = $this->validateAiReplyAgainstInstruction($text, $mailbox, $rule, $message);
+                if ($instructionViolation !== null) {
+                    $lastAiError = $instructionViolation;
+                    $text = '';
+                    $this->logger->warning('AI reply failed instruction-compliance validation and will not be sent.', [
+                        'reason' => $instructionViolation,
+                        'subject' => $message['subject'] ?? null,
+                        'from' => $message['from'] ?? null,
+                    ]);
+                }
             } catch (Throwable $e) {
                 $lastAiError = trim($e->getMessage());
                 $this->logger->warning('AI reply generation failed, falling back to template.', ['error' => $e->getMessage()]);
@@ -939,11 +1035,57 @@ class MailAssistantRunner
         if ($footerMode === 'static') {
             $footer = trim((string) (($replyConfig['footer_text'] ?? null) ?: (($mailbox['defaults']['footer'] ?? null) ?: '')));
             if ($footer !== '') {
+                $text = $this->stripTrailingGeneratedSignoff($text);
                 $text = rtrim($text) . "\n\n" . $footer;
             }
         }
 
         return trim($text);
+    }
+
+    private function stripTrailingGeneratedSignoff(string $text): string
+    {
+        $text = trim($text);
+        if ($text === '') {
+            return $text;
+        }
+
+        $paragraphs = preg_split('/\n\s*\n/u', $text) ?: [];
+        $paragraphs = array_values(array_filter(array_map(static function (string $paragraph): string {
+            return trim($paragraph);
+        }, $paragraphs), static function (string $paragraph): bool {
+            return $paragraph !== '';
+        }));
+
+        if (!count($paragraphs)) {
+            return $text;
+        }
+
+        $isSignoffParagraph = static function (string $paragraph): bool {
+            $normalized = preg_replace('/\s+/u', ' ', trim($paragraph)) ?? trim($paragraph);
+            if ($normalized === '') {
+                return false;
+            }
+
+            if (preg_match('/^(kind regards|regards|best regards|sincerely|thanks|thank you|med vänlig hälsning|vänliga hälsningar|hälsningar|vänligen|mvh|tack)[,!.\s]*$/iu', $normalized) === 1) {
+                return true;
+            }
+
+            return preg_match('/^(kind regards|regards|best regards|sincerely|med vänlig hälsning|vänliga hälsningar|hälsningar|vänligen|mvh)[,!.\s]+.+$/iu', $normalized) === 1;
+        };
+
+        $lastIndex = count($paragraphs) - 1;
+        if ($isSignoffParagraph($paragraphs[$lastIndex])) {
+            array_pop($paragraphs);
+        } elseif (count($paragraphs) >= 2) {
+            $candidate = $paragraphs[$lastIndex - 1] . "\n" . $paragraphs[$lastIndex];
+            if ($isSignoffParagraph($candidate)) {
+                array_pop($paragraphs);
+                array_pop($paragraphs);
+            }
+        }
+
+        return trim(implode("\n\n", $paragraphs));
     }
 
     private function evaluateSpamAssassin(array $message): array
@@ -1113,6 +1255,42 @@ class MailAssistantRunner
         return $prefix . ' ' . trim($subject);
     }
 
+    private function normalizeSubjectLine(string $subject, array $mailbox, array $rule = []): string
+    {
+        $subject = trim($subject);
+        if ($subject === '') {
+            return $subject;
+        }
+
+        // Resolve trim prefixes: rule-level overrides mailbox-level
+        $ruleTrimPrefixes = (array) ($rule['subject_trim_prefixes'] ?? []);
+        $mailboxTrimPrefixes = (array) ($mailbox['defaults']['subject_trim_prefixes'] ?? []);
+        $trimPrefixes = !empty($ruleTrimPrefixes) ? $ruleTrimPrefixes : $mailboxTrimPrefixes;
+
+        if (!count($trimPrefixes)) {
+            return $subject;
+        }
+
+        // Remove prefixes from the beginning of subject (case-insensitive)
+        $result = $subject;
+        $lastLen = strlen($result) + 1;
+        while ($lastLen !== strlen($result)) {
+            $lastLen = strlen($result);
+            foreach ($trimPrefixes as $prefix) {
+                $trimmed = trim((string) $prefix);
+                if ($trimmed === '') {
+                    continue;
+                }
+                if (stripos($result, $trimmed) === 0) {
+                    $result = ltrim(substr($result, strlen($trimmed)));
+                    break;
+                }
+            }
+        }
+
+        return trim($result) !== '' ? trim($result) : $subject;
+    }
+
     private function sendReply(array $mailbox, array $rule, array $message, string $subject, string $body, bool $dryRun): void
     {
         $replyConfig = (array) ($rule['reply'] ?? []);
@@ -1127,7 +1305,7 @@ class MailAssistantRunner
             throw new RuntimeException('Cannot send reply because no From email is configured.');
         }
 
-        $replyContent = $this->buildReplyContent($body, $message);
+        $replyContent = $this->buildReplyContent($body, $message, $rule);
         $headers = [
             'From: ' . $fromName . ' <' . $fromEmail . '>',
         ];
@@ -1212,10 +1390,12 @@ class MailAssistantRunner
         ];
     }
 
-    private function buildReplyContent(string $body, array $message = []): array
+    private function buildReplyContent(string $body, array $message = [], array $rule = []): array
     {
         $text = trim(str_replace(["\r\n", "\r"], "\n", $body));
-        $requestExcerpt = $this->buildOriginalRequestExcerpt($message);
+        $requestExcerpt = $this->shouldAppendOriginalRequestExcerpt($rule)
+            ? $this->buildOriginalRequestExcerpt($message)
+            : '';
         $textWithExcerpt = $this->appendOriginalRequestExcerptToText($text, $requestExcerpt);
 
         return [
@@ -1290,6 +1470,214 @@ class MailAssistantRunner
         }, preg_split('/\r\n?|\n/', $requestExcerpt) ?: []);
 
         return trim($text . "\n\nSummary of your request:\n" . implode("\n", $quotedLines));
+    }
+
+    private function shouldAppendOriginalRequestExcerpt(array $rule): bool
+    {
+        $reply = (array) ($rule['reply'] ?? []);
+        $customInstruction = strtolower(trim((string) (($reply['custom_instruction'] ?? null) ?: '')));
+        if ($customInstruction === '') {
+            return true;
+        }
+
+        if (preg_match('/\bwrite only the email body\b/u', $customInstruction) === 1) {
+            return false;
+        }
+
+        if (preg_match('/\bemail body only\b/u', $customInstruction) === 1) {
+            return false;
+        }
+
+        return true;
+    }
+
+    private function validateAiReplyAgainstInstruction(string $text, array $mailbox, array $rule, array $message): ?string
+    {
+        $reply = (array) ($rule['reply'] ?? []);
+        $instruction = trim((string) (($reply['custom_instruction'] ?? null) ?: ''));
+        if ($instruction === '') {
+            return null;
+        }
+
+        $normalizedInstruction = $this->normalizeInstructionText($instruction);
+        $normalizedReply = $this->normalizeInstructionText($text);
+        if ($normalizedReply === '') {
+            return 'AI reply was empty after generation.';
+        }
+
+        if ($this->instructionRequiresEnglishOnly($normalizedInstruction) && $this->looksSwedish($normalizedReply)) {
+            return 'AI reply violated the explicit English-only requirement.';
+        }
+
+        $requiredEmails = $this->extractEmailsFromHeaderValue($instruction);
+        foreach ($requiredEmails as $email) {
+            if (stripos($text, $email) === false) {
+                return 'AI reply omitted the required contact address: ' . $email;
+            }
+        }
+
+        $mustStateBullets = $this->extractMustStateBullets($instruction);
+        foreach ($mustStateBullets as $bullet) {
+            if (!$this->replySatisfiesBulletRequirement($normalizedReply, $bullet)) {
+                return 'AI reply did not satisfy the required statement: ' . $bullet;
+            }
+        }
+
+        if ($this->instructionRequiresRedirectOnly($normalizedInstruction) && $this->replyContainsForbiddenResponsibilityClaim($normalizedReply)) {
+            return 'AI reply contradicts the redirect-only / no-responsibility instruction.';
+        }
+
+        return null;
+    }
+
+    private function normalizeInstructionText(string $text): string
+    {
+        $text = strtolower($text);
+        $text = preg_replace('/\s+/u', ' ', $text) ?? $text;
+
+        return trim($text);
+    }
+
+    private function instructionRequiresEnglishOnly(string $normalizedInstruction): bool
+    {
+        return strpos($normalizedInstruction, 'write only the email body in english') !== false
+            || strpos($normalizedInstruction, 'write the reply in english') !== false
+            || strpos($normalizedInstruction, 'reply in english') !== false
+            || strpos($normalizedInstruction, 'english only') !== false;
+    }
+
+    private function instructionRequiresRedirectOnly(string $normalizedInstruction): bool
+    {
+        return (strpos($normalizedInstruction, 'does not handle these notices') !== false
+                || strpos($normalizedInstruction, 'not the proper recipient') !== false
+                || strpos($normalizedInstruction, 'received by tornevall networks in error') !== false)
+            && strpos($normalizedInstruction, 'must rerun the process') !== false;
+    }
+
+    private function looksSwedish(string $normalizedReply): bool
+    {
+        $markers = [
+            ' tack ', ' vänlig ', ' hälsning', ' med vänlig', ' vi ', ' och ', ' att ', ' inte ', ' detta ',
+            ' kommer ', ' undersöka ', ' situationen ', ' uppgifterna ', ' notifiering ', ' till ', ' från ',
+        ];
+        $haystack = ' ' . $normalizedReply . ' ';
+        $hits = 0;
+        foreach ($markers as $marker) {
+            if (strpos($haystack, $marker) !== false) {
+                $hits++;
+            }
+        }
+
+        return $hits >= 3;
+    }
+
+    private function extractMustStateBullets(string $instruction): array
+    {
+        $lines = preg_split('/\r\n?|\n/', $instruction) ?: [];
+        $collect = false;
+        $bullets = [];
+
+        foreach ($lines as $line) {
+            $trimmed = trim((string) $line);
+            $normalized = strtolower($trimmed);
+            if ($normalized === '') {
+                if ($collect && count($bullets)) {
+                    break;
+                }
+                continue;
+            }
+
+            if (strpos($normalized, 'the reply must state that') === 0) {
+                $collect = true;
+                continue;
+            }
+
+            if (!$collect) {
+                continue;
+            }
+
+            if (strpos($trimmed, '-') === 0) {
+                $bullets[] = ltrim(substr($trimmed, 1));
+                continue;
+            }
+
+            if (preg_match('/^[a-z].*:/i', $trimmed) === 1) {
+                break;
+            }
+        }
+
+        return array_values(array_filter(array_map('trim', $bullets), static function (string $bullet): bool {
+            return $bullet !== '';
+        }));
+    }
+
+    private function replySatisfiesBulletRequirement(string $normalizedReply, string $bullet): bool
+    {
+        $normalizedBullet = $this->normalizeInstructionText($bullet);
+
+        if (strpos($normalizedBullet, 'in error') !== false) {
+            return $this->containsAnyPhrase($normalizedReply, ['in error', 'by mistake', 'mistakenly', 'misdirected', 'wrong recipient']);
+        }
+
+        if (strpos($normalizedBullet, 'does not handle these notices') !== false || strpos($normalizedBullet, 'not the proper recipient') !== false) {
+            return $this->containsAnyPhrase($normalizedReply, ['does not handle', 'do not handle', 'not the proper recipient', 'not the correct recipient', 'not responsible for these notices']);
+        }
+
+        if (strpos($normalizedBullet, 'being deleted') !== false || strpos($normalizedBullet, 'deleted instead of handled') !== false) {
+            return $this->containsAnyPhrase($normalizedReply, ['deleted', 'deleting this message', 'this message will be deleted']);
+        }
+
+        if ((strpos($normalizedBullet, 'rerun the process') !== false || strpos($normalizedBullet, 'submit the notice directly') !== false)) {
+            return $this->containsAnyPhrase($normalizedReply, ['rerun the process', 'submit the notice directly', 'resubmit', 'submit it directly'])
+                && $this->containsAnyPhrase($normalizedReply, ['abuse@no-ack.net']);
+        }
+
+        if (strpos($normalizedBullet, 'future notices') !== false) {
+            return $this->containsAnyPhrase($normalizedReply, ['future notices', 'in the future', 'future notices of this kind'])
+                && $this->containsAnyPhrase($normalizedReply, ['abuse@no-ack.net']);
+        }
+
+        $keywords = array_values(array_filter(preg_split('/[^a-z0-9@._-]+/i', $normalizedBullet) ?: [], static function (string $token): bool {
+            static $stop = ['the', 'and', 'that', 'this', 'must', 'also', 'with', 'from', 'into', 'there', 'them', 'they', 'have', 'been', 'will', 'your', 'current', 'future', 'same', 'kind'];
+            return strlen($token) >= 5 && !in_array($token, $stop, true);
+        }));
+        $matched = 0;
+        foreach ($keywords as $keyword) {
+            if (strpos($normalizedReply, $keyword) !== false) {
+                $matched++;
+            }
+        }
+
+        return $matched >= min(2, count($keywords));
+    }
+
+    private function containsAnyPhrase(string $haystack, array $phrases): bool
+    {
+        foreach ($phrases as $phrase) {
+            if ($phrase !== '' && strpos($haystack, strtolower($phrase)) !== false) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function replyContainsForbiddenResponsibilityClaim(string $normalizedReply): bool
+    {
+        $forbiddenPhrases = [
+            'we will investigate',
+            'we are investigating',
+            'we will look into',
+            'we take this seriously and will investigate',
+            'we will remove',
+            'we are removing',
+            'we will see to remove',
+            'we will handle',
+            'we are handling',
+            'we will contact you if we have questions',
+        ];
+
+        return $this->containsAnyPhrase($normalizedReply, $forbiddenPhrases);
     }
 
     private function renderOriginalRequestExcerptHtml(string $requestExcerpt): string
@@ -1700,21 +2088,33 @@ class MailAssistantRunner
 
     private function extractEmailsFromHeaderValue(string $headerValue): array
     {
+        $headerValue = str_replace(["\r", "\n", ';'], [',', ',', ','], $headerValue);
         $result = [];
-        foreach (preg_split('/,/', $headerValue) ?: [] as $part) {
-            $part = trim((string) $part);
-            if ($part === '') {
-                continue;
+        if (preg_match_all('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,63}/i', $headerValue, $matches) === 1 || !empty($matches[0])) {
+            foreach ((array) ($matches[0] ?? []) as $email) {
+                $email = strtolower(trim((string) $email));
+                if ($email !== '' && filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    $result[] = $email;
+                }
             }
+        }
 
-            if (preg_match('/<([^>]+)>/', $part, $m) === 1) {
-                $email = trim((string) $m[1]);
-            } else {
-                $email = trim($part, '"\' ');
-            }
+        if (!count($result)) {
+            foreach (preg_split('/,/', $headerValue) ?: [] as $part) {
+                $part = trim((string) $part);
+                if ($part === '') {
+                    continue;
+                }
 
-            if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
-                $result[] = strtolower($email);
+                if (preg_match('/<([^>]+)>/', $part, $m) === 1) {
+                    $email = trim((string) $m[1]);
+                } else {
+                    $email = trim($part, '"\' ');
+                }
+
+                if (filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    $result[] = strtolower($email);
+                }
             }
         }
 

@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## 0.3.24 - 2026-04-19
+
+- Outgoing assistant replies are now stamped with `X-Tornevall-Mail-Assistant: sent`.
+- Incoming unread messages carrying that marker are now skipped as `assistant_sent_marker` before rule matching/reply, and marked seen to prevent self-reply loops.
+- Added regression coverage in `tests/assistant-sent-marker-regression.php`.
+
+## 0.3.23 - 2026-04-19
+
+- Trailing AI-generated signoffs are now stripped repeatedly before static footers are appended, which avoids duplicated closings such as both `Best regards` and `Regards` in the same outgoing reply.
+- Generic unmatched fallback replies now run the same trailing-signoff cleanup before applying a row/mailbox footer override.
+- Added regression coverage in `tests/footer-signoff-dedup-regression.php`.
+
+## 0.3.22 - 2026-04-19
+
+- Standalone runner now reads SpamAssassin `X-Spam-Score` as an additional score source when `X-Spam-Status` score metadata is missing.
+- Mailbox defaults can now carry `spam_score_reply_threshold`; when an unread message score is above that threshold, the runner suppresses reply handling and leaves the message unread.
+- Reply-suppressed messages are now tracked with reason `spam_score_reply_threshold_exceeded` and counters `messages_reply_spam_score_suppressed` / `mailboxes[].reply_spam_score_suppressed`.
+- Added regression coverage in `tests/spam-score-threshold-regression.php` for threshold-based reply suppression + unread preservation.
+
 ## 0.3.21 - 2026-04-19
 
 - Local conversation/thread summaries are now built from prior-handled message state and injected into AI request context for matched-rule replies, giving the model awareness of earlier turns in the same thread.

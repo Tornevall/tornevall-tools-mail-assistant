@@ -132,14 +132,17 @@ Rules can decide per message whether AI is enabled.
 - AI requests now default to the incoming sender language (`response_language=auto`), but explicit rule instructions such as **"reply in English"** are now promoted into a hard request-language override instead of being left as loose prose.
 - AI prompts are now stricter overall: authoritative rule instructions are treated as highest priority, and the model is explicitly told not to joke, improvise company facts, or invent a separate sign-off/signature when the runner will append the footer itself.
 - The standalone runner now also performs a local compliance check on returned AI text for critical instructions: if the generated reply violates an explicit English-only requirement, omits required redirect addresses, skips required “must state” facts, or claims responsibility/handling where the instruction says the notice should only be redirected, the reply is rejected instead of being sent.
+- When static footer mode is used, trailing AI-generated signoff blocks are now stripped repeatedly before footer append so replies do not end up with duplicated closings such as both `Best regards` and `Regards`.
 - Message bodies are now sanitized more aggressively before they are sent as AI request summary context: HTML/MIME noise, SpamAssassin wrapper text, forwarded `.eml` header dumps, and malformed embedded header blocks are stripped first so the actual original request survives.
 - Reply-aware message parsing now strips common quoted history blocks before rule matching and AI summary generation, so follow-up emails in an existing thread can still match the intended support rule.
 - The token owner still needs approved `provider_openai` access in Tools unless that user is admin.
 - Outgoing replies are now sent as `multipart/alternative`: a plain-text part is kept for compatibility, while the visible mail is also rendered as a small styled HTML card for more polished support replies.
+- Outgoing assistant replies are now stamped with `X-Tornevall-Mail-Assistant: sent` so follow-up polling can identify assistant-originated mail and avoid self-reply loops.
 - Outgoing replies now also append a compact excerpt of the original request, so the sent answer itself still shows what the user actually wrote even when the incoming mail was a malformed forwarded wrapper.
 - Exception: if the rule instruction explicitly says to **write only the email body**, the standalone runner now suppresses that appended request-summary block so the final sent body stays closer to the operator's exact instruction.
 - AI-enabled rules no longer fall back to the hardcoded generic sentence `Thank you for your message. We have reviewed it.` unless you explicitly configured a `template_text` fallback for that rule. If AI fails and no explicit template exists, the reply is aborted and the error is logged instead of sending a misleading canned answer.
 - Mailbox run errors for failed AI replies now also include which model(s) were tried, making empty-response or fallback-path failures easier to diagnose.
+- Mailbox defaults can now include `spam_score_reply_threshold` from Tools admin; if a message's SpamAssassin score is above that threshold, the runner suppresses reply handling for that message and explicitly keeps it unread.
 
 ### Generic AI fallback when no rule matches
 
@@ -166,6 +169,8 @@ Rules can decide per message whether AI is enabled.
 
 - Unmatched mail is left untouched.
 - If a message is skipped because no rule matches or the generic no-match fallback is disabled, unanswerable, or fails, it now stays unread even when `mark_seen_on_skip` is enabled.
+- Incoming unread mail containing `X-Tornevall-Mail-Assistant: sent` is now skipped before rule matching/reply as an anti-loop guard.
+- Those assistant-marked loop candidates are marked seen after skip to avoid repeated unread reprocessing.
 - If a rule matches but `reply.enabled=false`, the message now also stays unread by default instead of being silently marked seen/moved/deleted as if a reply had actually been sent.
 - `mark_seen_on_skip` now only applies to deliberate heuristic skips such as high-score SpamAssassin junk, not to configuration-driven no-match cases.
 - Cron/manual execution only polls unread mail. Already-read mail is skipped immediately.
@@ -179,6 +184,7 @@ Rules can decide per message whether AI is enabled.
 - History-specific fields such as `message_state` and `message_state_records[]` are hidden by default and only included when `--include-history` is used.
 - When a reply is sent successfully but the IMAP finalize step (`markSeen`, move, or delete) fails, the run now records that as an explicit warning reason such as `rule_matched_replied_imap_finalize_failed` instead of silently looking fully handled.
 - The runner now parses SpamAssassin headers so heavily flagged messages can be skipped before handling, while wrapper-style SpamAssassin rewrites can still be copied locally and stripped from the body before rule matching/AI.
+- Spam score extraction now also reads `X-Spam-Score` directly when `X-Spam-Status` does not provide a parseable `score=` value.
 - Local SpamAssassin/debug copies are written under `storage/cache/message-copies/` when the runner detects a rewritten wrapper or another message worth preserving for review.
 - The mini dashboard can still show local message-history details when history mode has been requested, but unread reruns are never blocked by that history.
 - Reply sending now supports multiple transports:
@@ -187,6 +193,7 @@ Rules can decide per message whether AI is enabled.
   - `custom_mta` (pipes RFC822 message to `MAIL_ASSISTANT_MTA_COMMAND`)
   - `tools_api` (relays via `POST /api/mail-support-assistant/send-reply`)
 - All of those reply transports now emit both plain text and styled HTML when a reply is sent, so mailbox clients that prefer HTML get a formatted message while older clients still see the plain-text fallback.
+- Generic unmatched fallback replies now apply the same trailing-signoff cleanup before row/mailbox footer override, which keeps one clean closing block there as well.
 - The generated HTML reply now uses stronger explicit text colors plus light-only color-scheme hints so manual replies/quoted history in mail clients are less likely to end up as white text on a white background.
 - If local transport fails and `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`, the runner automatically retries through the Tools relay endpoint.
 - If `MAIL_ASSISTANT_MAIL_TRANSPORT=tools_api` but `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN` is missing, the runner now skips relay mode and continues with the configured fallback order instead of aborting the whole reply attempt.

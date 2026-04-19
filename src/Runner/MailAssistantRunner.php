@@ -14,6 +14,9 @@ use Throwable;
 
 class MailAssistantRunner
 {
+    private const ASSISTANT_SENT_HEADER = 'X-Tornevall-Mail-Assistant';
+    private const ASSISTANT_SENT_HEADER_VALUE = 'sent';
+
     private ToolsApiClient $tools;
     private Logger $logger;
     private MessageStateStore $messageState;
@@ -109,6 +112,8 @@ class MailAssistantRunner
             'messages_skipped' => 0,
             'messages_failed' => 0,
             'messages_spamassassin_skipped' => 0,
+            'messages_reply_spam_score_suppressed' => 0,
+            'messages_assistant_sent_skipped' => 0,
             'messages_read_skipped' => 0,
             'spamassassin_copies_saved' => 0,
             'errors' => [],
@@ -145,6 +150,8 @@ class MailAssistantRunner
                 'skipped' => 0,
                 'failed' => 0,
                 'spamassassin_skipped' => 0,
+                'reply_spam_score_suppressed' => 0,
+                'assistant_sent_skipped' => 0,
                 'read_skipped' => 0,
                 'spamassassin_copies_saved' => 0,
                 'message_results' => [],
@@ -209,6 +216,24 @@ class MailAssistantRunner
 
                         $message['thread_context'] = $this->messageState->summarizeThread((int) $mailboxSummary['id'], $message);
 
+                        if ($this->isAssistantSentMessage($message)) {
+                            $mailboxSummary['skipped']++;
+                            $mailboxSummary['assistant_sent_skipped']++;
+                            $summary['messages_skipped']++;
+                            $summary['messages_assistant_sent_skipped']++;
+                            $this->recordMessageState($mailboxSummary, $message, 'ignored', 'assistant_sent_marker', $dryRun);
+                            $this->recordMessageResult($mailboxSummary, $message, 'skipped', 'assistant_sent_marker');
+                            $this->logger->info('Message skipped because assistant marker header is present (anti-loop guard).', [
+                                'mailbox' => $mailbox['name'] ?? null,
+                                'uid' => $message['uid'] ?? null,
+                                'message_id' => $message['message_id'] ?? null,
+                            ]);
+                            if (!$dryRun) {
+                                $imap->markSeen((int) $message['uid']);
+                            }
+                            continue;
+                        }
+
                         $spamDecision = $this->evaluateSpamAssassin($message);
                         if (!empty($spamDecision['save_copy'])) {
                             $this->saveMessageCopy($mailbox, $message, (string) ($spamDecision['reason'] ?? 'spamassassin_copy'));
@@ -237,6 +262,32 @@ class MailAssistantRunner
                             } else {
                                 $this->preserveUnreadState($imap, $message, $dryRun, 'spamassassin_skip_preserve_unread');
                             }
+                            continue;
+                        }
+
+                        $replySpamScoreDecision = $this->evaluateReplySpamScoreThreshold($mailbox, $message);
+                        if (!empty($replySpamScoreDecision['skip_reply'])) {
+                            $mailboxSummary['skipped']++;
+                            $mailboxSummary['reply_spam_score_suppressed']++;
+                            $summary['messages_skipped']++;
+                            $summary['messages_reply_spam_score_suppressed']++;
+                            $skipReason = (string) ($replySpamScoreDecision['reason'] ?? 'spam_score_reply_threshold_exceeded');
+                            $this->recordMessageState($mailboxSummary, $message, 'ignored', $skipReason, $dryRun, [
+                                'reply_spam_score_threshold' => $replySpamScoreDecision['threshold'] ?? null,
+                                'reply_spam_score' => $replySpamScoreDecision['score'] ?? null,
+                            ]);
+                            $this->recordMessageResult($mailboxSummary, $message, 'skipped', $skipReason, [
+                                'reply_spam_score_threshold' => $replySpamScoreDecision['threshold'] ?? null,
+                                'reply_spam_score' => $replySpamScoreDecision['score'] ?? null,
+                            ]);
+                            $this->logger->info('Message reply suppressed by mailbox spam score threshold and kept unread.', [
+                                'mailbox' => $mailbox['name'] ?? null,
+                                'uid' => $message['uid'] ?? null,
+                                'message_id' => $message['message_id'] ?? null,
+                                'threshold' => $replySpamScoreDecision['threshold'] ?? null,
+                                'score' => $replySpamScoreDecision['score'] ?? null,
+                            ]);
+                            $this->preserveUnreadState($imap, $message, $dryRun, 'spam_score_reply_threshold_preserve_unread');
                             continue;
                         }
 
@@ -451,6 +502,8 @@ class MailAssistantRunner
             'messages_skipped' => $summary['messages_skipped'],
             'messages_failed' => $summary['messages_failed'],
             'messages_spamassassin_skipped' => $summary['messages_spamassassin_skipped'],
+            'messages_reply_spam_score_suppressed' => $summary['messages_reply_spam_score_suppressed'],
+            'messages_assistant_sent_skipped' => $summary['messages_assistant_sent_skipped'],
             'messages_read_skipped' => $summary['messages_read_skipped'],
             'spamassassin_copies_saved' => $summary['spamassassin_copies_saved'],
             'errors' => count($summary['errors']),
@@ -855,6 +908,8 @@ class MailAssistantRunner
             return $text;
         }
 
+        $text = $this->stripTrailingGeneratedSignoff($text);
+
         return rtrim($text) . "\n\n" . $footer;
     }
 
@@ -1130,14 +1185,23 @@ class MailAssistantRunner
             return preg_match('/^(kind regards|regards|best regards|sincerely|med vänlig hälsning|vänliga hälsningar|hälsningar|vänligen|mvh)[,!.\s]+.+$/iu', $normalized) === 1;
         };
 
-        $lastIndex = count($paragraphs) - 1;
-        if ($isSignoffParagraph($paragraphs[$lastIndex])) {
-            array_pop($paragraphs);
-        } elseif (count($paragraphs) >= 2) {
-            $candidate = $paragraphs[$lastIndex - 1] . "\n" . $paragraphs[$lastIndex];
-            if ($isSignoffParagraph($candidate)) {
+        while (count($paragraphs)) {
+            $removed = false;
+            $lastIndex = count($paragraphs) - 1;
+            if ($isSignoffParagraph($paragraphs[$lastIndex])) {
                 array_pop($paragraphs);
-                array_pop($paragraphs);
+                $removed = true;
+            } elseif (count($paragraphs) >= 2) {
+                $candidate = $paragraphs[$lastIndex - 1] . "\n" . $paragraphs[$lastIndex];
+                if ($isSignoffParagraph($candidate)) {
+                    array_pop($paragraphs);
+                    array_pop($paragraphs);
+                    $removed = true;
+                }
+            }
+
+            if (!$removed) {
+                break;
             }
         }
 
@@ -1188,6 +1252,59 @@ class MailAssistantRunner
             'save_copy' => $shouldSaveCopy,
             'reason' => $reason,
         ];
+    }
+
+    private function evaluateReplySpamScoreThreshold(array $mailbox, array $message): array
+    {
+        $threshold = $this->resolveReplySpamScoreThreshold($mailbox);
+        if ($threshold === null) {
+            return [
+                'skip_reply' => false,
+                'reason' => '',
+                'threshold' => null,
+                'score' => null,
+            ];
+        }
+
+        $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
+        $score = isset($spam['score']) && is_numeric($spam['score']) ? (float) $spam['score'] : null;
+        if ($score === null) {
+            return [
+                'skip_reply' => false,
+                'reason' => '',
+                'threshold' => $threshold,
+                'score' => null,
+            ];
+        }
+
+        $skipReply = $score > $threshold;
+
+        return [
+            'skip_reply' => $skipReply,
+            'reason' => $skipReply ? 'spam_score_reply_threshold_exceeded' : '',
+            'threshold' => $threshold,
+            'score' => $score,
+        ];
+    }
+
+    private function resolveReplySpamScoreThreshold(array $mailbox): ?float
+    {
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+        $value = $defaults['spam_score_reply_threshold'] ?? null;
+        if ($value === null || $value === '') {
+            return null;
+        }
+
+        if (!is_numeric($value)) {
+            return null;
+        }
+
+        $threshold = (float) $value;
+        if ($threshold <= 0) {
+            return null;
+        }
+
+        return $threshold;
     }
 
     private function saveMessageCopy(array $mailbox, array $message, string $reason): void
@@ -1444,6 +1561,7 @@ class MailAssistantRunner
         $replyContent = $this->buildReplyContent($body, $message, $rule);
         $headers = [
             'From: ' . $fromName . ' <' . $fromEmail . '>',
+            self::ASSISTANT_SENT_HEADER . ': ' . self::ASSISTANT_SENT_HEADER_VALUE,
         ];
 
         $inReplyTo = trim((string) ($message['message_id'] ?? ''));
@@ -1524,6 +1642,15 @@ class MailAssistantRunner
             'cc' => $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Cc')),
             'bcc' => $this->extractEmailsFromHeaderValue($this->extractHeaderValue($headers, 'Bcc')),
         ];
+    }
+
+    private function isAssistantSentMessage(array $message): bool
+    {
+        $headers = is_array($message['headers_map'] ?? null) ? $message['headers_map'] : [];
+        $marker = strtolower(trim((string) ($headers[strtolower(self::ASSISTANT_SENT_HEADER)] ?? '')));
+
+        return $marker === strtolower(self::ASSISTANT_SENT_HEADER_VALUE)
+            || in_array($marker, ['1', 'true', 'yes', 'on'], true);
     }
 
     private function buildReplyContent(string $body, array $message = [], array $rule = []): array

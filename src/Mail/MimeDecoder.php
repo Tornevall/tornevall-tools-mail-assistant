@@ -310,6 +310,7 @@ class MimeDecoder
     {
         $status = (string) ($headers['x-spam-status'] ?? '');
         $present = isset($headers['x-spam-status'])
+            || isset($headers['x-spam-score'])
             || isset($headers['x-spam-flag'])
             || isset($headers['x-spam-level'])
             || isset($headers['x-spam-report'])
@@ -327,6 +328,13 @@ class MimeDecoder
             }
             if (preg_match('/tests=([^\s]+)/i', $status, $testsMatch)) {
                 $tests = array_values(array_filter(array_map('trim', explode(',', (string) $testsMatch[1]))));
+            }
+        }
+
+        if ($score === null) {
+            $scoreHeader = trim((string) ($headers['x-spam-score'] ?? ''));
+            if ($scoreHeader !== '' && preg_match('/([-+]?[0-9]*\.?[0-9]+)/', $scoreHeader, $scoreMatch) === 1) {
+                $score = (float) $scoreMatch[1];
             }
         }
 

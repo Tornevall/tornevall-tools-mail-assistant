@@ -1,6 +1,6 @@
 {
   "name": "tornevall/mail-support-assistant",
-  "version": "0.3.21",
+  "version": "0.3.24",
   "description": "Standalone IMAP support-mail assistant that fetches admin-managed config from Tools.",
   "type": "project",
   "require": {

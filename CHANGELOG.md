@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.3.20 - 2026-04-19
+
+- Local `message-state.json` no longer influences unread processing at all; unread IMAP mail is always re-evaluated from IMAP state instead of being skipped because of prior local history.
+- History diagnostics are now opt-in: `message_state` and per-mailbox `message_state_records[]` are hidden from normal run output unless `php run --include-history` is used.
+- The CLI help now documents `--include-history` as the explicit switch for persisting/showing local message-history diagnostics.
+
+## 0.3.19 - 2026-04-19
+
+- Unmatched-mail fallback now supports ordered add-row rules from Tools config (`defaults.generic_no_match_rules[]`) instead of relying on only one generic IF/instruction pair.
+- The standalone runner now evaluates active unmatched rows in `sort_order` order and can fall through to later rows when earlier rows are rejected by strict AI triage.
+- Per-row footer/model/reasoning overrides are now honored on unmatched fallback replies when provided.
+- Backward compatibility remains for legacy single fields (`generic_no_match_if`, `generic_no_match_instruction`, `generic_no_match_footer`) when row data is missing.
+
 ## 0.3.18 - 2026-04-19
 
 - Matched-rule AI requests now harden language obedience: explicit rule instructions such as "reply in English" are promoted into an actual request-language override instead of relying only on free-form prompt interpretation.

@@ -58,6 +58,7 @@ class ToolsApiClient
         $reasoningEffort = $this->normalizeReasoningEffort(($reply['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
         $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
         $cleanBody = $this->buildIncomingMessageExcerpt($message, 2400);
+        $threadContext = $this->buildThreadContextExcerpt($message);
 
         $contextLines = [
             'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
@@ -71,6 +72,9 @@ class ToolsApiClient
                 . ', flagged=' . (!empty($spam['flagged']) ? 'yes' : 'no')
                 . ', score=' . (($spam['score'] ?? null) !== null ? (string) $spam['score'] : 'n/a')
                 . ', tests=' . implode(',', array_values((array) ($spam['tests'] ?? []))),
+            '',
+            'Conversation thread summary (local state):',
+            $threadContext,
             '',
             'Request summary (sanitized):',
             $cleanBody,
@@ -151,6 +155,7 @@ class ToolsApiClient
         $genericLanguageDirective = $this->resolveGenericNoMatchLanguageDirective($mailbox, $replyInstruction, $message);
         $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
         $cleanBody = $this->buildIncomingMessageExcerpt($message, 2600);
+        $threadContext = $this->buildThreadContextExcerpt($message);
         $userPrompt = implode("\n", [
             'You are evaluating whether an unmatched support email may be answered safely.',
             'Return ONLY valid JSON with this schema:',
@@ -186,6 +191,9 @@ class ToolsApiClient
                 . ', flagged=' . (!empty($spam['flagged']) ? 'yes' : 'no')
                 . ', score=' . (($spam['score'] ?? null) !== null ? (string) $spam['score'] : 'n/a')
                 . ', tests=' . implode(',', array_values((array) ($spam['tests'] ?? []))),
+            '',
+            'Conversation thread summary (local state):',
+            $threadContext,
             '',
             'Request summary (sanitized):',
             $cleanBody,
@@ -578,6 +586,60 @@ class ToolsApiClient
         }
 
         return '';
+    }
+
+    private function buildThreadContextExcerpt(array $message, int $maxLength = 1800): string
+    {
+        $thread = is_array($message['thread_context'] ?? null) ? $message['thread_context'] : [];
+        $entries = array_values((array) ($thread['messages'] ?? []));
+        if (!count($entries)) {
+            return 'No prior local thread history available.';
+        }
+
+        $lines = [];
+        foreach ($entries as $index => $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $lineParts = [
+                '#' . ($index + 1),
+                'status=' . trim((string) ($entry['status'] ?? '')),
+                'reason=' . trim((string) ($entry['reason'] ?? '')),
+                'from=' . trim((string) ($entry['from'] ?? '')),
+                'to=' . trim((string) ($entry['to'] ?? '')),
+                'subject=' . trim((string) ($entry['subject'] ?? '')),
+            ];
+
+            $bodyExcerpt = trim((string) ($entry['body_excerpt'] ?? ''));
+            if ($bodyExcerpt !== '') {
+                $lineParts[] = 'incoming=' . preg_replace('/\s+/u', ' ', $bodyExcerpt);
+            }
+
+            $replyExcerpt = trim((string) ($entry['reply_excerpt'] ?? ''));
+            if ($replyExcerpt !== '') {
+                $lineParts[] = 'reply=' . preg_replace('/\s+/u', ' ', $replyExcerpt);
+            }
+
+            $lines[] = implode(' | ', array_filter($lineParts, static function ($value): bool {
+                return trim((string) $value) !== '';
+            }));
+        }
+
+        $summary = trim(implode("\n", $lines));
+        if ($summary === '') {
+            return 'No prior local thread history available.';
+        }
+
+        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+            if (mb_strlen($summary, 'UTF-8') > $maxLength) {
+                $summary = rtrim(mb_substr($summary, 0, $maxLength, 'UTF-8')) . '…';
+            }
+        } elseif (strlen($summary) > $maxLength) {
+            $summary = rtrim(substr($summary, 0, $maxLength)) . '...';
+        }
+
+        return $summary;
     }
 
     private function normalizeReasoningEffort($value): ?string

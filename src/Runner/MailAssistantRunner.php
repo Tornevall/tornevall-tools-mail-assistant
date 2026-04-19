@@ -17,6 +17,7 @@ class MailAssistantRunner
     private ToolsApiClient $tools;
     private Logger $logger;
     private MessageStateStore $messageState;
+    private bool $includeHistory = false;
 
     public function __construct(ToolsApiClient $tools, Logger $logger, ?MessageStateStore $messageState = null)
     {
@@ -94,6 +95,7 @@ class MailAssistantRunner
     public function run(array $options = []): array
     {
         $dryRun = !empty($options['dry_run']);
+        $this->includeHistory = !empty($options['include_history']);
         $limitOverride = isset($options['limit']) ? max(1, (int) $options['limit']) : null;
         $mailboxFilter = isset($options['mailbox']) ? (int) $options['mailbox'] : null;
 
@@ -106,16 +108,17 @@ class MailAssistantRunner
             'messages_handled' => 0,
             'messages_skipped' => 0,
             'messages_failed' => 0,
-            'messages_state_skipped' => 0,
-            'messages_previously_recorded_unread' => 0,
             'messages_spamassassin_skipped' => 0,
             'messages_read_skipped' => 0,
             'spamassassin_copies_saved' => 0,
             'errors' => [],
             'mailboxes' => [],
-            'message_state' => $this->messageState->summary(),
-            'message_state_mode' => 'history_only',
         ];
+        if ($this->includeHistory) {
+            $summary['messages_previously_recorded_unread'] = 0;
+            $summary['message_state'] = $this->messageState->summary();
+            $summary['message_state_mode'] = 'on_demand';
+        }
 
         try {
             $config = $this->tools->fetchConfig();
@@ -141,15 +144,16 @@ class MailAssistantRunner
                 'handled' => 0,
                 'skipped' => 0,
                 'failed' => 0,
-                'state_skipped' => 0,
-                'previously_recorded_unread' => 0,
                 'spamassassin_skipped' => 0,
                 'read_skipped' => 0,
                 'spamassassin_copies_saved' => 0,
-                'message_state_records' => [],
                 'message_results' => [],
                 'errors' => [],
             ];
+            if ($this->includeHistory) {
+                $mailboxSummary['previously_recorded_unread'] = 0;
+                $mailboxSummary['message_state_records'] = [];
+            }
 
             try {
                 $imap = $this->createImapMailboxClient((array) ($mailbox['imap'] ?? []));
@@ -184,33 +188,14 @@ class MailAssistantRunner
                         $messageKey = $this->resolveMessageKey($message);
                         $messageId = (string) ($message['message_id'] ?? '');
                         $priorState = null;
-                        if ($messageKey !== '') {
+                        if ($this->includeHistory && $messageKey !== '') {
                             $priorState = $this->messageState->getRecord((int) $mailboxSummary['id'], $messageKey);
                         }
                         if (is_array($priorState)) {
-                            $mailboxSummary['previously_recorded_unread']++;
-                            $summary['messages_previously_recorded_unread']++;
-                            $this->logger->info('Unread message was seen in local history and will be re-evaluated.', [
-                                'mailbox' => $mailbox['name'] ?? null,
-                                'uid' => $message['uid'] ?? null,
-                                'message_id' => $messageId,
-                                'message_key' => $messageKey,
-                                'previous_status' => $priorState['status'] ?? null,
-                                'previous_reason' => $priorState['reason'] ?? null,
-                                'previous_recorded_at' => $priorState['recorded_at'] ?? null,
-                            ]);
-
-                            if ($this->wasPreviouslyRepliedState($priorState)) {
-                                $mailboxSummary['skipped']++;
-                                $mailboxSummary['state_skipped']++;
-                                $summary['messages_skipped']++;
-                                $summary['messages_state_skipped']++;
-                                $this->recordMessageResult($mailboxSummary, $message, 'state_skipped', 'previous_reply_recorded_unread', [
-                                    'previous_status' => (string) ($priorState['status'] ?? ''),
-                                    'previous_reason' => (string) ($priorState['reason'] ?? ''),
-                                    'previous_recorded_at' => (string) ($priorState['recorded_at'] ?? ''),
-                                ]);
-                                $this->logger->warning('Unread message already has a previous reply record; skipping automatic resend to avoid duplicate replies.', [
+                            if ($this->includeHistory) {
+                                $mailboxSummary['previously_recorded_unread']++;
+                                $summary['messages_previously_recorded_unread']++;
+                                $this->logger->info('Unread message was seen in local history and will be re-evaluated.', [
                                     'mailbox' => $mailbox['name'] ?? null,
                                     'uid' => $message['uid'] ?? null,
                                     'message_id' => $messageId,
@@ -219,9 +204,10 @@ class MailAssistantRunner
                                     'previous_reason' => $priorState['reason'] ?? null,
                                     'previous_recorded_at' => $priorState['recorded_at'] ?? null,
                                 ]);
-                                continue;
                             }
                         }
+
+                        $message['thread_context'] = $this->messageState->summarizeThread((int) $mailboxSummary['id'], $message);
 
                         $spamDecision = $this->evaluateSpamAssassin($message);
                         if (!empty($spamDecision['save_copy'])) {
@@ -248,6 +234,8 @@ class MailAssistantRunner
                             ]);
                             if ($this->shouldMarkSeenOnSkip($mailbox, (string) ($spamDecision['reason'] ?? '')) && !$dryRun) {
                                 $imap->markSeen((int) $message['uid']);
+                            } else {
+                                $this->preserveUnreadState($imap, $message, $dryRun, 'spamassassin_skip_preserve_unread');
                             }
                             continue;
                         }
@@ -312,6 +300,8 @@ class MailAssistantRunner
                             ]);
                             if ($this->shouldMarkSeenOnSkip($mailbox, (string) ($genericNoMatch['reason'] ?? '')) && !$dryRun) {
                                 $imap->markSeen((int) $message['uid']);
+                            } else {
+                                $this->preserveUnreadState($imap, $message, $dryRun, 'generic_no_match_preserve_unread');
                             }
                             continue;
                         }
@@ -367,6 +357,7 @@ class MailAssistantRunner
                                     'selected_rule' => $selectedRuleSummary,
                                     'reason' => $skipReason,
                                 ]);
+                                $this->preserveUnreadState($imap, $message, $dryRun, 'reply_not_sent_preserve_unread');
                                 continue;
                             }
 
@@ -448,7 +439,9 @@ class MailAssistantRunner
             $summary['mailboxes'][] = $mailboxSummary;
         }
 
-        $summary['message_state'] = $this->messageState->summary();
+        if ($this->includeHistory) {
+            $summary['message_state'] = $this->messageState->summary();
+        }
 
         $this->logger->info('Mail assistant run completed.', [
             'dry_run' => $dryRun,
@@ -457,12 +450,11 @@ class MailAssistantRunner
             'messages_handled' => $summary['messages_handled'],
             'messages_skipped' => $summary['messages_skipped'],
             'messages_failed' => $summary['messages_failed'],
-            'messages_state_skipped' => $summary['messages_state_skipped'],
-            'messages_previously_recorded_unread' => $summary['messages_previously_recorded_unread'],
             'messages_spamassassin_skipped' => $summary['messages_spamassassin_skipped'],
             'messages_read_skipped' => $summary['messages_read_skipped'],
             'spamassassin_copies_saved' => $summary['spamassassin_copies_saved'],
             'errors' => count($summary['errors']),
+            'include_history' => $this->includeHistory,
         ]);
         $this->logger->saveLastRun($summary);
 
@@ -648,8 +640,8 @@ class MailAssistantRunner
 
         try {
             $defaults = (array) ($mailbox['defaults'] ?? []);
-            $ifCondition = trim((string) (($defaults['generic_no_match_if'] ?? null) ?: ''));
-            if ($ifCondition === '') {
+            $noMatchRules = $this->resolveGenericNoMatchRules($mailbox);
+            if (!$noMatchRules) {
                 $this->logger->info('Generic no-match AI fallback skipped: IF condition is missing.', [
                     'mailbox' => $mailbox['name'] ?? null,
                     'uid' => $message['uid'] ?? null,
@@ -663,91 +655,88 @@ class MailAssistantRunner
                 ];
             }
 
-            $aiResult = $this->tools->evaluateGenericNoMatchReply($mailbox, $message, [
-                'if_condition' => $ifCondition,
-                'reply_instruction' => (string) (($defaults['generic_no_match_instruction'] ?? null) ?: ''),
-                'ai_model' => (string) (($defaults['generic_no_match_ai_model'] ?? null) ?: ''),
-                'ai_fallback_model' => (string) (($defaults['generic_no_match_ai_fallback_model'] ?? null) ?: ''),
-                'ai_reasoning_effort' => (string) (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: ''),
-            ]);
-            $replyText = trim((string) ($aiResult['reply'] ?? ($aiResult['response'] ?? '')));
-            $decision = [
-                'can_reply' => !empty($aiResult['can_reply']),
-                'certainty' => (string) ($aiResult['certainty'] ?? ''),
-                'reason' => (string) ($aiResult['reason'] ?? ''),
-                'risk_flags' => (array) ($aiResult['risk_flags'] ?? []),
-                'decision_reason_code' => (string) ($aiResult['decision_reason_code'] ?? ''),
-                'raw_response' => (string) ($aiResult['raw_response'] ?? ''),
-            ];
-            if (empty($aiResult['can_reply'])) {
-                $reasonCode = (string) ($aiResult['decision_reason_code'] ?? 'no_matching_rule_generic_ai_rejected');
-                $this->logger->info('Generic no-match AI fallback skipped: classifier rejected reply.', [
+            $lastDecision = [];
+            foreach ($noMatchRules as $noMatchRule) {
+                $aiResult = $this->tools->evaluateGenericNoMatchReply($mailbox, $message, [
+                    'if_condition' => (string) ($noMatchRule['if_condition'] ?? ''),
+                    'reply_instruction' => (string) ($noMatchRule['instruction'] ?? ''),
+                    'ai_model' => (string) ($noMatchRule['ai_model'] ?? (($defaults['generic_no_match_ai_model'] ?? null) ?: '')),
+                    'ai_fallback_model' => (string) (($defaults['generic_no_match_ai_fallback_model'] ?? null) ?: ''),
+                    'ai_reasoning_effort' => (string) ($noMatchRule['ai_reasoning_effort'] ?? (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: '')),
+                ]);
+                $replyText = trim((string) ($aiResult['reply'] ?? ($aiResult['response'] ?? '')));
+                $decision = [
+                    'can_reply' => !empty($aiResult['can_reply']),
+                    'certainty' => (string) ($aiResult['certainty'] ?? ''),
+                    'reason' => (string) ($aiResult['reason'] ?? ''),
+                    'risk_flags' => (array) ($aiResult['risk_flags'] ?? []),
+                    'decision_reason_code' => (string) ($aiResult['decision_reason_code'] ?? ''),
+                    'raw_response' => (string) ($aiResult['raw_response'] ?? ''),
+                    'matched_no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
+                    'matched_no_match_rule_order' => (int) ($noMatchRule['sort_order'] ?? 0),
+                ];
+                $lastDecision = $decision;
+
+                if (empty($aiResult['can_reply'])) {
+                    continue;
+                }
+
+                if (!$this->isGenericAiReplyUsable($replyText)) {
+                    $this->logger->info('Generic no-match AI fallback skipped: response not usable.', [
+                        'mailbox' => $mailbox['name'] ?? null,
+                        'uid' => $message['uid'] ?? null,
+                        'message_id' => $message['message_id'] ?? null,
+                        'no_match_rule_id' => $noMatchRule['id'] ?? null,
+                    ]);
+                    continue;
+                }
+
+                $replyText = $this->applyGenericFallbackFooter($mailbox, $replyText, (string) ($noMatchRule['footer'] ?? ''));
+                $subjectPrefix = trim((string) (($defaults['generic_no_match_subject_prefix'] ?? null) ?: 'Re:'));
+                $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
+                $syntheticRule = [
+                    'reply' => [
+                        'from_name' => (string) (($defaults['from_name'] ?? null) ?: ''),
+                        'from_email' => (string) (($defaults['from_email'] ?? null) ?: ''),
+                        'bcc' => (string) (($defaults['bcc'] ?? null) ?: ''),
+                    ],
+                ];
+
+                $this->sendReply($mailbox, $syntheticRule, $message, $subject, $replyText, $dryRun);
+                $finalizeResult = $this->finalizeHandledMessage($imap, $message, $dryRun);
+
+                $this->logger->info('Generic no-match AI fallback reply sent.', [
                     'mailbox' => $mailbox['name'] ?? null,
                     'uid' => $message['uid'] ?? null,
                     'message_id' => $message['message_id'] ?? null,
+                    'dry_run' => $dryRun,
+                    'used_fallback_model' => !empty($aiResult['used_fallback_model']),
+                    'model' => $aiResult['model'] ?? null,
                     'certainty' => $aiResult['certainty'] ?? null,
-                    'reason' => $aiResult['reason'] ?? null,
+                    'decision_reason' => $aiResult['reason'] ?? null,
                     'risk_flags' => $aiResult['risk_flags'] ?? [],
-                    'decision_reason_code' => $reasonCode,
+                    'matched_no_match_rule_id' => $noMatchRule['id'] ?? null,
+                    'matched_no_match_rule_order' => $noMatchRule['sort_order'] ?? null,
+                    'post_handle_action' => $finalizeResult['post_handle_action'] ?? null,
+                    'post_handle_warning' => $finalizeResult['post_handle_warning'] ?? null,
                 ]);
 
                 return [
-                    'handled' => false,
-                    'reason' => $reasonCode,
+                    'handled' => true,
+                    'reason' => !empty($finalizeResult['post_handle_warning'])
+                        ? 'no_matching_rule_generic_ai_replied_imap_finalize_failed'
+                        : 'no_matching_rule_generic_ai_replied',
+                    'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
+                    'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
                     'ai_decision' => $decision,
+                    'reply_excerpt' => $this->buildStateExcerpt($replyText, 500),
                 ];
             }
-
-            if (!$this->isGenericAiReplyUsable($replyText)) {
-                $this->logger->info('Generic no-match AI fallback skipped: response not usable.', [
-                    'mailbox' => $mailbox['name'] ?? null,
-                    'uid' => $message['uid'] ?? null,
-                    'message_id' => $message['message_id'] ?? null,
-                ]);
-
-                return [
-                    'handled' => false,
-                    'reason' => 'no_matching_rule_generic_ai_empty_reply',
-                    'ai_decision' => $decision,
-                ];
-            }
-
-            $replyText = $this->applyGenericFallbackFooter($mailbox, $replyText);
-            $subjectPrefix = trim((string) (($defaults['generic_no_match_subject_prefix'] ?? null) ?: 'Re:'));
-            $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
-            $syntheticRule = [
-                'reply' => [
-                    'from_name' => (string) (($defaults['from_name'] ?? null) ?: ''),
-                    'from_email' => (string) (($defaults['from_email'] ?? null) ?: ''),
-                    'bcc' => (string) (($defaults['bcc'] ?? null) ?: ''),
-                ],
-            ];
-
-            $this->sendReply($mailbox, $syntheticRule, $message, $subject, $replyText, $dryRun);
-            $finalizeResult = $this->finalizeHandledMessage($imap, $message, $dryRun);
-
-            $this->logger->info('Generic no-match AI fallback reply sent.', [
-                'mailbox' => $mailbox['name'] ?? null,
-                'uid' => $message['uid'] ?? null,
-                'message_id' => $message['message_id'] ?? null,
-                'dry_run' => $dryRun,
-                'used_fallback_model' => !empty($aiResult['used_fallback_model']),
-                'model' => $aiResult['model'] ?? null,
-                'certainty' => $aiResult['certainty'] ?? null,
-                'decision_reason' => $aiResult['reason'] ?? null,
-                'risk_flags' => $aiResult['risk_flags'] ?? [],
-                'post_handle_action' => $finalizeResult['post_handle_action'] ?? null,
-                'post_handle_warning' => $finalizeResult['post_handle_warning'] ?? null,
-            ]);
 
             return [
-                'handled' => true,
-                'reason' => !empty($finalizeResult['post_handle_warning'])
-                    ? 'no_matching_rule_generic_ai_replied_imap_finalize_failed'
-                    : 'no_matching_rule_generic_ai_replied',
-                'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
-                'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
-                'ai_decision' => $decision,
+                'handled' => false,
+                'reason' => (string) ($lastDecision['decision_reason_code'] ?? 'no_matching_rule_generic_ai_rejected'),
+                'ai_decision' => $lastDecision,
             ];
         } catch (Throwable $e) {
             $this->logger->warning('Generic no-match AI fallback failed.', [
@@ -850,7 +839,7 @@ class MailAssistantRunner
         return true;
     }
 
-    private function applyGenericFallbackFooter(array $mailbox, string $text): string
+    private function applyGenericFallbackFooter(array $mailbox, string $text, string $ruleFooter = ''): string
     {
         $text = trim($text);
         if ($text === '') {
@@ -858,12 +847,76 @@ class MailAssistantRunner
         }
 
         $defaults = (array) ($mailbox['defaults'] ?? []);
-        $footer = trim((string) (($defaults['generic_no_match_footer'] ?? null) ?: (($defaults['footer'] ?? null) ?: '')));
+        $footer = trim($ruleFooter);
+        if ($footer === '') {
+            $footer = trim((string) (($defaults['generic_no_match_footer'] ?? null) ?: (($defaults['footer'] ?? null) ?: '')));
+        }
         if ($footer === '') {
             return $text;
         }
 
         return rtrim($text) . "\n\n" . $footer;
+    }
+
+    private function resolveGenericNoMatchRules(array $mailbox): array
+    {
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+        $rows = [];
+        foreach ((array) ($defaults['generic_no_match_rules'] ?? []) as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $isActive = $this->toNullableBool($row['is_active'] ?? true);
+            if ($isActive === false) {
+                continue;
+            }
+
+            $ifCondition = trim((string) (($row['if'] ?? null) ?: ($row['if_condition'] ?? null) ?: ''));
+            $instruction = trim((string) (($row['instruction'] ?? null) ?: ''));
+            if ($ifCondition === '' || $instruction === '') {
+                continue;
+            }
+
+            $rows[] = [
+                'id' => (int) ($row['id'] ?? 0),
+                'sort_order' => (int) ($row['sort_order'] ?? 0),
+                'if_condition' => $ifCondition,
+                'instruction' => $instruction,
+                'footer' => trim((string) (($row['footer'] ?? null) ?: '')),
+                'ai_model' => trim((string) (($row['ai_model'] ?? null) ?: '')),
+                'ai_reasoning_effort' => trim((string) (($row['ai_reasoning_effort'] ?? null) ?: '')),
+            ];
+        }
+
+        usort($rows, static function (array $a, array $b): int {
+            $orderCompare = ((int) $a['sort_order']) <=> ((int) $b['sort_order']);
+            if ($orderCompare !== 0) {
+                return $orderCompare;
+            }
+
+            return ((int) $a['id']) <=> ((int) $b['id']);
+        });
+
+        if ($rows) {
+            return $rows;
+        }
+
+        $legacyIf = trim((string) (($defaults['generic_no_match_if'] ?? null) ?: ''));
+        $legacyInstruction = trim((string) (($defaults['generic_no_match_instruction'] ?? null) ?: ''));
+        if ($legacyIf === '' || $legacyInstruction === '') {
+            return [];
+        }
+
+        return [[
+            'id' => 0,
+            'sort_order' => 0,
+            'if_condition' => $legacyIf,
+            'instruction' => $legacyInstruction,
+            'footer' => trim((string) (($defaults['generic_no_match_footer'] ?? null) ?: '')),
+            'ai_model' => '',
+            'ai_reasoning_effort' => '',
+        ]];
     }
 
     private function handleMessage(ImapMailboxClient $imap, array $mailbox, array $rule, array $message, bool $dryRun): array
@@ -894,6 +947,9 @@ class MailAssistantRunner
         $finalizeResult['reason'] = $replySent
             ? 'rule_matched_replied'
             : 'rule_matched_processed_without_reply';
+        if ($replySent) {
+            $finalizeResult['reply_excerpt'] = $this->buildStateExcerpt($replyText, 500);
+        }
 
         return $finalizeResult;
     }
@@ -1205,6 +1261,10 @@ class MailAssistantRunner
         $mailboxId = (int) ($mailboxSummary['id'] ?? 0);
         $record = [
             'message_id' => (string) ($message['message_id'] ?? ''),
+            'thread_key' => $this->resolveThreadKey($message),
+            'subject_normalized' => (string) (($message['subject_normalized'] ?? null) ?: ''),
+            'in_reply_to' => (string) (($message['in_reply_to'] ?? null) ?: ''),
+            'references' => array_values((array) ($message['references'] ?? [])),
             'status' => $status,
             'reason' => $reason,
             'subject' => (string) ($message['subject'] ?? ''),
@@ -1213,6 +1273,7 @@ class MailAssistantRunner
             'date' => (string) ($message['date'] ?? ''),
             'uid' => (int) ($message['uid'] ?? 0),
             'dry_run' => $dryRun,
+            'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
         ];
         foreach ($extra as $key => $value) {
             $record[(string) $key] = $value;
@@ -1222,7 +1283,82 @@ class MailAssistantRunner
             $this->messageState->remember($mailboxId, $messageKey, $record);
         }
 
-        $mailboxSummary['message_state_records'][] = array_merge(['message_key' => $messageKey], $record);
+        if ($this->includeHistory) {
+            $mailboxSummary['message_state_records'][] = array_merge(['message_key' => $messageKey], $record);
+        }
+    }
+
+    private function preserveUnreadState(ImapMailboxClient $imap, array $message, bool $dryRun, string $reason): void
+    {
+        if ($dryRun) {
+            return;
+        }
+
+        $uid = (int) ($message['uid'] ?? 0);
+        if ($uid < 1) {
+            return;
+        }
+
+        $result = $imap->markUnseen($uid);
+        if ($result) {
+            $this->logger->info('Message explicitly kept unread after skip/non-reply decision.', [
+                'uid' => $uid,
+                'message_id' => $message['message_id'] ?? null,
+                'reason' => $reason,
+            ]);
+            return;
+        }
+
+        $this->logger->warning('Mailbox client could not explicitly clear the seen flag after skip/non-reply decision.', [
+            'uid' => $uid,
+            'message_id' => $message['message_id'] ?? null,
+            'reason' => $reason,
+        ]);
+    }
+
+    private function buildStateMessageBodyExcerpt(array $message): string
+    {
+        $candidates = [
+            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
+            (string) (($message['body_text'] ?? null) ?: ''),
+            (string) (($message['body_text_raw'] ?? null) ?: ''),
+        ];
+
+        foreach ($candidates as $candidate) {
+            $excerpt = $this->buildStateExcerpt($candidate, 500);
+            if ($excerpt !== '') {
+                return $excerpt;
+            }
+        }
+
+        return '';
+    }
+
+    private function buildStateExcerpt(string $text, int $maxLength = 500): string
+    {
+        return MimeDecoder::extractRequestSummaryText($text, $maxLength);
+    }
+
+    private function resolveThreadKey(array $message): string
+    {
+        $references = array_values(array_filter((array) ($message['references'] ?? []), static function ($value): bool {
+            return trim((string) $value) !== '';
+        }));
+        if (count($references)) {
+            return strtolower(trim((string) $references[0]));
+        }
+
+        $inReplyTo = strtolower(trim((string) (($message['in_reply_to'] ?? null) ?: '')));
+        if ($inReplyTo !== '') {
+            return $inReplyTo;
+        }
+
+        $subjectNormalized = strtolower(trim((string) (($message['subject_normalized'] ?? null) ?: '')));
+        if ($subjectNormalized !== '') {
+            return 'subject:' . $subjectNormalized;
+        }
+
+        return strtolower(trim((string) (($message['message_id'] ?? null) ?: '')));
     }
 
     private function recordMessageResult(array &$mailboxSummary, array $message, string $outcome, string $reason, array $extra = []): void

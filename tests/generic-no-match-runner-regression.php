@@ -52,6 +52,7 @@ final class TrackingGenericNoMatchImapMailboxClient extends ImapMailboxClient
 {
     private array $messages;
     public array $markSeenCalls = [];
+    public array $markUnseenCalls = [];
 
     public function __construct(array $messages)
     {
@@ -67,6 +68,13 @@ final class TrackingGenericNoMatchImapMailboxClient extends ImapMailboxClient
     public function markSeen(int $uid): bool
     {
         $this->markSeenCalls[] = $uid;
+
+        return true;
+    }
+
+    public function markUnseen(int $uid): bool
+    {
+        $this->markUnseenCalls[] = $uid;
 
         return true;
     }
@@ -147,10 +155,11 @@ $logger = new Logger(makeTempPath('mail-assistant-log', '.log'), makeTempPath('m
 $messageState = new MessageStateStore(makeTempPath('mail-assistant-state', '.json'));
 $imap = new TrackingGenericNoMatchImapMailboxClient([$message]);
 $runner = new TestableGenericNoMatchRunner(new RejectingGenericNoMatchToolsApiClient($config), $logger, $messageState, $imap);
-$summary = $runner->run();
+$summary = $runner->run(['include_history' => true]);
 
 assertSameValue(1, $summary['messages_skipped'] ?? null, 'Rejected unmatched-mail triage should count as skipped.');
 assertSameValue(0, count($imap->markSeenCalls), 'Rejected unmatched-mail triage must leave the message unread.');
+assertSameValue([303], $imap->markUnseenCalls, 'Rejected unmatched-mail triage should explicitly keep the message unread when IMAP supports it.');
 assertSameValue('no_matching_rule_generic_ai_rejected', $summary['mailboxes'][0]['message_state_records'][0]['reason'] ?? null, 'Rejected unmatched-mail triage should persist the strict reject reason.');
 assertSameValue('no_matching_rule_generic_ai_rejected', $summary['mailboxes'][0]['message_results'][0]['reason'] ?? null, 'Rejected unmatched-mail triage should also appear in the current-run result summary.');
 assertSameValue(['unsolicited_sales'], $summary['mailboxes'][0]['message_results'][0]['generic_ai_decision']['risk_flags'] ?? null, 'Rejected unmatched-mail triage should preserve AI risk flags for diagnostics.');

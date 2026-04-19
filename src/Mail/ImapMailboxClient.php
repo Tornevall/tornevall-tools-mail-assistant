@@ -91,6 +91,16 @@ class ImapMailboxClient
         return (bool) @imap_setflag_full($stream, (string) $uid, '\\Seen', ST_UID);
     }
 
+    public function markUnseen(int $uid): bool
+    {
+        $stream = $this->requireStream();
+        if (!function_exists('imap_clearflag_full')) {
+            return false;
+        }
+
+        return (bool) @imap_clearflag_full($stream, (string) $uid, '\\Seen', ST_UID);
+    }
+
     public function close(): void
     {
         if ($this->stream) {
@@ -181,7 +191,7 @@ class ImapMailboxClient
         $htmlBody = '';
 
         if (!$structure) {
-            $body = (string) @imap_body($stream, $messageNo);
+            $body = (string) @imap_body($stream, $messageNo, FT_PEEK);
             return [MimeDecoder::normalizeText($body), ''];
         }
 
@@ -200,7 +210,7 @@ class ImapMailboxClient
         }
 
         $section = $partNumber === '' ? '1' : $partNumber;
-        $raw = (string) @imap_fetchbody($stream, $messageNo, $section);
+        $raw = (string) @imap_fetchbody($stream, $messageNo, $section, FT_PEEK);
         $decoded = MimeDecoder::decodePartBody($raw, (int) ($structure->encoding ?? 0));
         $subtype = strtoupper((string) ($structure->subtype ?? 'PLAIN'));
 

@@ -6,7 +6,8 @@ This project is intentionally small and can stay **databaseless**:
 
 - mailbox + rule configuration lives in Tools admin
 - the client fetches config from `GET /api/mail-support-assistant/config`
-- local state is limited to session data, logs, the last run summary, and a local message-history file in `storage/`
+- unmatched fallback now supports ordered add-row IF + instruction rules (`defaults.generic_no_match_rules[]`)
+- local state is limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`
 
 The project is **not** a Laravel app and must stay runnable as plain PHP.
 
@@ -18,7 +19,7 @@ The project is **not** a Laravel app and must stay runnable as plain PHP.
 - `src/` - Tools API client, IMAP adapter, MIME decoding, runner, and local auth
 - `templates/` - minimal login/dashboard templates
 - `storage/` - logs, last-run summary, and persisted local state
-- `storage/state/message-state.json` - normalized local message history per mailbox for diagnostics
+- `storage/state/message-state.json` - optional normalized local message history per mailbox for diagnostics when explicitly requested
 
 ## Requirements
 
@@ -69,6 +70,7 @@ php run --self-test
 php run --dry-run
 php run --dry-run --limit=5
 php run --mailbox=12 --dry-run
+php run --dry-run --include-history
 ```
 
 ### What `--dry-run` does
@@ -77,6 +79,13 @@ php run --mailbox=12 --dry-run
 - resolves matching rules
 - builds reply payloads
 - skips actual reply send / IMAP move / IMAP delete actions
+
+### What `--include-history` does
+
+- includes `message_state` and per-mailbox `message_state_records[]` in the run summary
+- persists the current pass into `storage/state/message-state.json`
+- exposes prior local history matches as diagnostics only
+- does **not** block unread IMAP mail from being processed
 
 ## Mini web UI
 
@@ -90,7 +99,7 @@ Current UI features:
 - AJAX-triggered safe dry-run action (reuses the same PHP runner as CLI)
 - config preview fetched live from Tools
 - last-run summary preview from `storage/last-run.json`
-- local message-history preview from `storage/state/message-state.json`
+- optional local message-history preview from `storage/state/message-state.json` when history mode has been requested previously
 - direct link back to Tools admin
 - recent local log tail
 
@@ -139,12 +148,15 @@ Rules can decide per message whether AI is enabled.
   - mailbox defaults: `generic_no_match_ai_enabled` (preferred)
   - top-level/settings/features variants from Tools config (`generic_no_match_ai_enabled` / `generic_reply_on_no_match`)
   - env fallback: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1`
-- Mailbox config for that fallback now has two separate admin-managed fields:
-  - `generic_no_match_if`: describes which otherwise unmatched mail may be answered at all
-  - `generic_no_match_instruction`: describes how to write the reply if that IF condition clearly matches
+- Mailbox config for that fallback now supports ordered add-row rules under `generic_no_match_rules[]`.
+- Each active row can define:
+  - `if`: describes which otherwise unmatched mail may be answered at all
+  - `instruction`: describes how to write the reply if that IF condition clearly matches
+  - optional `footer`, `ai_model`, and `ai_reasoning_effort`
 - The no-match AI path now asks Tools/OpenAI for a **strict JSON decision** instead of trusting any free-form reply text.
 - A generic fallback reply is sent only when the AI returns valid JSON with `can_reply=true`, `certainty="high"`, and a non-empty `reply` payload.
-- If the `generic_no_match_if` field is empty, the fallback is treated as unconfigured and no unmatched-mail AI reply is sent.
+- If there are no valid active unmatched rows (non-empty `if` + `instruction`), the fallback is treated as unconfigured and no unmatched-mail AI reply is sent.
+- Rows are evaluated in `sort_order` order and may fall through to later rows when an earlier row is rejected.
 - The AI is told to ignore outer SpamAssassin wrapper prose when it only forwards the original email, while still using SpamAssassin score/tests as safety hints.
 - Mailbox-level unmatched-mail fallback can now also carry its own `generic_no_match_ai_reasoning_effort` override from Tools config; Tools still decides per selected model whether reasoning is actually forwarded.
 - The config payload from Tools can now also include additive `user.ai_daily_budget` metadata so operators can inspect the effective AI token cap/remaining budget that Mail Support Assistant shares with the SocialGPT reply endpoint.
@@ -157,19 +169,18 @@ Rules can decide per message whether AI is enabled.
 - If a rule matches but `reply.enabled=false`, the message now also stays unread by default instead of being silently marked seen/moved/deleted as if a reply had actually been sent.
 - `mark_seen_on_skip` now only applies to deliberate heuristic skips such as high-score SpamAssassin junk, not to configuration-driven no-match cases.
 - Cron/manual execution only polls unread mail. Already-read mail is skipped immediately.
-- Unread mail may be reprocessed on later runs even if the same `Message-Id` already exists in local history; the local state file is now diagnostic history only and is no longer used as a dedupe gate.
-- Exception: if the same unread message already has a prior local state showing that a reply was sent, the runner now skips automatic resend and reports that explicitly as `previous_reply_recorded_unread` to avoid duplicate replies.
+- Unread mail may be reprocessed on later runs even if the same `Message-Id` already exists in local history; the local state file is diagnostic only and never blocks unread IMAP mail.
 - Matchers currently support `from`, `to`, `subject`, and optional body text contains checks.
 - Subject matching is now reply-aware (`Re:`, `Fwd:`, `Sv:` prefixes are stripped before rule checks), and outgoing replies now preserve `In-Reply-To` / `References` headers so answers stay in the same thread.
 - Unmatched mail is now also logged more explicitly with mailbox/from/to/subject details, which makes `scanned` + `skipped` runs easier to diagnose.
 - No-match handling now records clearer state reasons such as `no_matching_rule_generic_ai_disabled`, `no_matching_rule_generic_ai_unconfigured`, `no_matching_rule_generic_ai_rejected`, `no_matching_rule_generic_ai_invalid_json`, `no_matching_rule_generic_ai_not_certain`, `no_matching_rule_generic_ai_empty_reply`, `no_matching_rule_generic_ai_error`, and `no_matching_rule_generic_ai_replied`.
 - Run summaries now separate `messages_read_skipped` from other skipped categories, so mail that is already marked read at ingest is tracked clearly and does not need to be interpreted as `no_matching_rule` noise.
-- Run summaries also expose `messages_previously_recorded_unread` so operators can see when an unread thread was present in local history but was deliberately re-evaluated anyway.
-- Run summaries now also expose per-mailbox `message_results[]` entries so operators can see what happened to each scanned message during the current pass (`handled`, `skipped`, `state_skipped`, `warning`, `error`).
+- Run summaries now also expose per-mailbox `message_results[]` entries so operators can see what happened to each scanned message during the current pass (`handled`, `skipped`, `warning`, `error`).
+- History-specific fields such as `message_state` and `message_state_records[]` are hidden by default and only included when `--include-history` is used.
 - When a reply is sent successfully but the IMAP finalize step (`markSeen`, move, or delete) fails, the run now records that as an explicit warning reason such as `rule_matched_replied_imap_finalize_failed` instead of silently looking fully handled.
 - The runner now parses SpamAssassin headers so heavily flagged messages can be skipped before handling, while wrapper-style SpamAssassin rewrites can still be copied locally and stripped from the body before rule matching/AI.
 - Local SpamAssassin/debug copies are written under `storage/cache/message-copies/` when the runner detects a rewritten wrapper or another message worth preserving for review.
-- The mini dashboard now shows both the last run summary and the local message-history file so operators can see prior outcomes without that history blocking unread reruns.
+- The mini dashboard can still show local message-history details when history mode has been requested, but unread reruns are never blocked by that history.
 - Reply sending now supports multiple transports:
   - `smtp` (default, direct SMTP delivery without requiring local sendmail/postfix)
   - `php_mail` (legacy/local PHP `mail()`)

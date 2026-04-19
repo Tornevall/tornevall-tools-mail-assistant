@@ -14,6 +14,7 @@ $options = [
     'self_test' => false,
     'cleanup' => false,
     'cleanup_copies' => false,
+    'include_history' => false,
     'help' => false,
 ];
 
@@ -40,6 +41,10 @@ foreach (array_slice($argv, 1) as $argument) {
         $options['cleanup_copies'] = true;
         continue;
     }
+    if ($argument === '--include-history') {
+        $options['include_history'] = true;
+        continue;
+    }
     if (strpos($argument, '--limit=') === 0) {
         $options['limit'] = (int) substr($argument, 8);
         continue;
@@ -55,7 +60,7 @@ if ($options['help']) {
     echo "Usage:\n";
     echo "  php run --help\n";
     echo "  php run --self-test\n";
-    echo "  php run --dry-run [--limit=5] [--mailbox=12]\n";
+    echo "  php run --dry-run [--limit=5] [--mailbox=12] [--include-history]\n";
     echo "  php run --cleanup              Purge log, last-run and message state\n";
     echo "  php run --cleanup-copies       Same + delete saved message copies\n";
     echo "\nEnv keys:\n";
@@ -70,6 +75,8 @@ if ($options['help']) {
     echo "  MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API / MAIL_ASSISTANT_MTA_COMMAND\n";
     echo "  MAIL_ASSISTANT_WEB_USER\n";
     echo "  MAIL_ASSISTANT_WEB_PASSWORD\n";
+    echo "\nNotes:\n";
+    echo "  History/message-state diagnostics are hidden by default and only included when --include-history is used.\n";
     exit(0);
 }
 

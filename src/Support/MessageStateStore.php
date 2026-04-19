@@ -177,6 +177,71 @@ class MessageStateStore
         ];
     }
 
+    public function summarizeThread(int $mailboxId, array $message, int $maxMessages = 6): array
+    {
+        $threadKey = $this->resolveThreadKeyFromMessage($message);
+        $messageId = $this->normalizeKey((string) ($message['message_id'] ?? ''));
+        $references = array_values(array_filter(array_map([$this, 'normalizeKey'], (array) ($message['references'] ?? []))));
+        $inReplyTo = $this->normalizeKey((string) ($message['in_reply_to'] ?? ''));
+
+        if ($mailboxId < 1) {
+            return [
+                'thread_key' => $threadKey,
+                'messages' => [],
+            ];
+        }
+
+        $state = $this->load();
+        $messages = array_values((array) ($state['mailboxes'][(string) $mailboxId]['messages'] ?? []));
+        $threadMessages = array_values(array_filter($messages, function (array $record) use ($threadKey, $messageId, $references, $inReplyTo): bool {
+            $recordThreadKey = $this->normalizeKey((string) ($record['thread_key'] ?? ''));
+            $recordMessageId = $this->normalizeKey((string) ($record['message_id'] ?? ''));
+
+            if ($threadKey !== '' && $recordThreadKey !== '' && $threadKey === $recordThreadKey) {
+                return true;
+            }
+            if ($messageId !== '' && $recordMessageId === $messageId) {
+                return true;
+            }
+            if ($recordMessageId !== '' && in_array($recordMessageId, $references, true)) {
+                return true;
+            }
+            if ($inReplyTo !== '' && $recordMessageId === $inReplyTo) {
+                return true;
+            }
+
+            return false;
+        }));
+
+        usort($threadMessages, static function (array $a, array $b): int {
+            return strcmp((string) ($a['recorded_at'] ?? ''), (string) ($b['recorded_at'] ?? ''));
+        });
+
+        if ($maxMessages > 0 && count($threadMessages) > $maxMessages) {
+            $threadMessages = array_slice($threadMessages, -$maxMessages);
+        }
+
+        $threadMessages = array_values(array_map(static function (array $record): array {
+            return [
+                'message_id' => (string) ($record['message_id'] ?? ''),
+                'status' => (string) ($record['status'] ?? ''),
+                'reason' => (string) ($record['reason'] ?? ''),
+                'subject' => (string) ($record['subject'] ?? ''),
+                'from' => (string) ($record['from'] ?? ''),
+                'to' => (string) ($record['to'] ?? ''),
+                'date' => (string) ($record['date'] ?? ''),
+                'recorded_at' => (string) ($record['recorded_at'] ?? ''),
+                'body_excerpt' => (string) ($record['body_excerpt'] ?? ''),
+                'reply_excerpt' => (string) ($record['reply_excerpt'] ?? ''),
+            ];
+        }, $threadMessages));
+
+        return [
+            'thread_key' => $threadKey,
+            'messages' => $threadMessages,
+        ];
+    }
+
     private function load(): array
     {
         if (!is_readable($this->stateFile)) {
@@ -202,6 +267,26 @@ class MessageStateStore
     private function normalizeKey(string $messageKey): string
     {
         return strtolower(trim($messageKey));
+    }
+
+    private function resolveThreadKeyFromMessage(array $message): string
+    {
+        $references = array_values(array_filter(array_map([$this, 'normalizeKey'], (array) ($message['references'] ?? []))));
+        if (count($references)) {
+            return $references[0];
+        }
+
+        $inReplyTo = $this->normalizeKey((string) ($message['in_reply_to'] ?? ''));
+        if ($inReplyTo !== '') {
+            return $inReplyTo;
+        }
+
+        $subjectNormalized = $this->normalizeKey((string) ($message['subject_normalized'] ?? ''));
+        if ($subjectNormalized !== '') {
+            return 'subject:' . $subjectNormalized;
+        }
+
+        return $this->normalizeKey((string) ($message['message_id'] ?? ''));
     }
 
     public function purge(): void

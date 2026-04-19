@@ -30,6 +30,7 @@ final class FakeImapMailboxClient extends ImapMailboxClient
 {
     private array $messages;
     public array $markSeenCalls = [];
+    public array $markUnseenCalls = [];
 
     public function __construct(array $messages)
     {
@@ -45,6 +46,13 @@ final class FakeImapMailboxClient extends ImapMailboxClient
     public function markSeen(int $uid): bool
     {
         $this->markSeenCalls[] = $uid;
+
+        return true;
+    }
+
+    public function markUnseen(int $uid): bool
+    {
+        $this->markUnseenCalls[] = $uid;
 
         return true;
     }
@@ -110,7 +118,7 @@ function runCase(array $mailboxDefaults, array $message): array
     $imap = new FakeImapMailboxClient([$message]);
     $runner = new TestableMailAssistantRunner(new FakeToolsApiClient($config), $logger, $messageState, $imap);
 
-    $summary = $runner->run();
+    $summary = $runner->run(['include_history' => true]);
 
     return [$summary, $imap];
 }
@@ -135,6 +143,7 @@ function runCase(array $mailboxDefaults, array $message): array
 
 assertSameValue(1, $noMatchSummary['messages_skipped'] ?? null, 'No-match case should be counted as skipped.');
 assertSameValue(0, count($noMatchImap->markSeenCalls), 'No-match/configuration-driven skip must stay unread.');
+assertSameValue([101], $noMatchImap->markUnseenCalls, 'No-match/configuration-driven skip should explicitly keep the message unread when supported.');
 assertSameValue(
     'no_matching_rule_generic_ai_disabled',
     $noMatchSummary['mailboxes'][0]['message_state_records'][0]['reason'] ?? null,
@@ -166,6 +175,7 @@ assertSameValue(
 
 assertSameValue(1, $spamSummary['messages_spamassassin_skipped'] ?? null, 'SpamAssassin case should be counted separately.');
 assertSameValue([202], $spamImap->markSeenCalls, 'Explicit heuristic skip should still honor mark_seen_on_skip.');
+assertSameValue([], $spamImap->markUnseenCalls, 'Explicit heuristic skip should not force unread when operator wants it marked seen.');
 
 fwrite(STDOUT, "skip-mark-seen-regression: ok\n");
 

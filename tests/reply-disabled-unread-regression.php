@@ -30,6 +30,7 @@ final class ReplyDisabledImapMailboxClient extends ImapMailboxClient
 {
     private array $messages;
     public array $markSeenCalls = [];
+    public array $markUnseenCalls = [];
     public array $moveCalls = [];
     public array $deleteCalls = [];
 
@@ -47,6 +48,12 @@ final class ReplyDisabledImapMailboxClient extends ImapMailboxClient
     public function markSeen(int $uid): bool
     {
         $this->markSeenCalls[] = $uid;
+        return true;
+    }
+
+    public function markUnseen(int $uid): bool
+    {
+        $this->markUnseenCalls[] = $uid;
         return true;
     }
 
@@ -154,6 +161,7 @@ if (!is_array($messageResult)) {
 assertSameValue(1, $result['messages_skipped'] ?? null, 'Reply-disabled matches should now stay in skipped state by default.');
 assertSameValue(0, $result['messages_handled'] ?? null, 'Reply-disabled matches should not be reported as handled when no reply was sent.');
 assertSameValue([], $imap->markSeenCalls, 'Reply-disabled matches must stay unread by default.');
+assertSameValue([707], $imap->markUnseenCalls, 'Reply-disabled matches should explicitly be forced back to unread when supported.');
 assertSameValue([], $imap->moveCalls, 'Reply-disabled matches must not be moved by default.');
 assertSameValue([], $imap->deleteCalls, 'Reply-disabled matches must not be deleted by default.');
 assertSameValue('rule_matched_reply_not_sent', $messageResult['reason'] ?? null, 'Reply-disabled matches should expose the explicit unread-preservation reason.');

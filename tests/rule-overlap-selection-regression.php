@@ -153,7 +153,7 @@ $message = [
 $logger = new Logger(makeTempPath('mail-assistant-overlap-log', '.log'), makeTempPath('mail-assistant-overlap-last-run', '.json'));
 $state = new MessageStateStore(makeTempPath('mail-assistant-overlap-state', '.json'));
 $runner = new RuleOverlapTestRunner(new RuleOverlapFakeToolsApiClient($config), $logger, $state, new RuleOverlapFakeImapMailboxClient([$message]));
-$result = $runner->run(['dry_run' => true]);
+$result = $runner->run(['dry_run' => true, 'include_history' => true]);
 
 $record = $result['mailboxes'][0]['message_state_records'][0] ?? null;
 if (!is_array($record)) {

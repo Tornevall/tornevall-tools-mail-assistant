@@ -29,7 +29,7 @@ It is expected to:
 - `src/Mail/MimeDecoder.php` - subject/body decoding helpers
 - `src/Runner/MailAssistantRunner.php` - orchestration logic
 - `src/Web/WebApp.php` - env-login dashboard
-- `src/Support/MessageStateStore.php` - persisted local message history under `storage/state/message-state.json`
+- `src/Support/MessageStateStore.php` - optional local message-history storage under `storage/state/message-state.json` when history mode is requested
 - `tests/generic-no-match-json-regression.php` - strict JSON allow/deny parsing coverage for unmatched-mail AI
 - `tests/generic-no-match-runner-regression.php` - runner-level guard that rejected unmatched-mail AI decisions stay unread
 - `tests/bcc-routing-regression.php` - verifies normalized `to` / `cc` / `bcc` relay recipient forwarding
@@ -47,13 +47,11 @@ It is expected to:
   because Tools already hosts the real config surface.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is
   limited to `.env`, sessions, logs, last-run summaries, and optional message copies in `storage/`.
-- Handled or explicitly ignored mail is still recorded locally by normalized `Message-Id`, but that history is now
-  diagnostic only and must not block later re-evaluation of mail that is still unread in IMAP.
-- Exception: if a message is still unread in IMAP but the local history already proves that a reply was sent for that
-  exact message key, the runner should skip automatic resend and surface `previous_reply_recorded_unread` instead of
-  sending a duplicate reply.
-- If `Message-Id` is missing, the runner synthesizes a stable local fallback message key so prior outcomes still appear
-  in `storage/state/message-state.json` for diagnostics.
+- Handled or explicitly ignored mail may still be recorded locally by normalized `Message-Id`, but only when history
+  mode is explicitly requested (for example `php run --include-history`).
+- That history is diagnostic only and must never block later re-evaluation of mail that is still unread in IMAP.
+- If `Message-Id` is missing, the runner synthesizes a stable local fallback message key so prior outcomes can still be
+  stored in `storage/state/message-state.json` when history mode is enabled.
 - SpamAssassin headers should be treated as heuristics only: severe/high-score messages may be skipped, but
   wrapper-style SpamAssassin rewrites should prefer local copy preservation plus body cleanup over blind skipping.
 - Reply chains are now first-class runtime input: subjects are matched without `Re:`/`Fwd:`/`Sv:` prefixes, quoted
@@ -67,22 +65,9 @@ It is expected to:
   deterministically, and record both the winning rule and the competing matches so operators can see why one rule won
   over another.
 - Winner selection order is now: lower `sort_order` first (explicit operator priority), then more contextual match
-  types (`subject` / `body` before generic `from`), then more active match fields, then longer combined match text.
-- No-match handling can now be config-gated to try one generic AI fallback reply (`generic_no_match_ai_enabled`) before
-  ignoring; that mailbox-level fallback now depends on two separate config fields too: `generic_no_match_if` (when an otherwise unmatched mail may be answered at all) and `generic_no_match_instruction` (how the answer should be written if allowed).
-- The unmatched-mail AI path must require a strict JSON decision and may only send a reply when the model explicitly returns an allow decision with high certainty.
-- If that strict unmatched-mail decision is rejected or is anything below high certainty, any leftover reply payload must be discarded so diagnostics never masquerade as an approved answer.
-- Generic no-match outcome reasons should stay explicit in state/logs: `no_matching_rule_generic_ai_disabled`,
-  `no_matching_rule_generic_ai_unconfigured`, `no_matching_rule_generic_ai_rejected`,
-  `no_matching_rule_generic_ai_invalid_json`, `no_matching_rule_generic_ai_not_certain`,
-  `no_matching_rule_generic_ai_empty_reply`, `no_matching_rule_generic_ai_error`,
-  `no_matching_rule_generic_ai_replied`.
-- Runner summaries now keep `messages_read_skipped` as a dedicated category; mail that is already seen at ingest should
-  not be mixed into `no_matching_rule` diagnostics.
-- Runner summaries may also report `messages_previously_recorded_unread` when an unread thread existed in local history
-  but was intentionally re-checked.
+  types (`subject` / `body` before `to` / `from`), then more active match criteria, then longer combined match text.
 
-## Runtime assumptions
+## Implementation hints
 
 - Real mailbox work requires `ext-imap`.
 - Missing `ext-imap` must fail clearly instead of crashing unclearly.
@@ -144,4 +129,3 @@ php -l src/Web/WebApp.php
 php run --help
 php run --self-test
 ```
-

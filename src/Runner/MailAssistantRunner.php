@@ -192,6 +192,24 @@ class MailAssistantRunner
                             continue;
                         }
 
+                        if ($this->isAssistantSentMessage($message)) {
+                            $mailboxSummary['skipped']++;
+                            $mailboxSummary['assistant_sent_skipped']++;
+                            $summary['messages_skipped']++;
+                            $summary['messages_assistant_sent_skipped']++;
+                            $this->recordMessageState($mailboxSummary, $message, 'ignored', 'assistant_sent_marker', $dryRun);
+                            $this->recordMessageResult($mailboxSummary, $message, 'skipped', 'assistant_sent_marker');
+                            $this->logger->info('Message skipped because assistant marker header is present (anti-loop guard).', [
+                                'mailbox' => $mailbox['name'] ?? null,
+                                'uid' => $message['uid'] ?? null,
+                                'message_id' => $message['message_id'] ?? null,
+                            ]);
+                            if (!$dryRun) {
+                                $imap->markSeen((int) $message['uid']);
+                            }
+                            continue;
+                        }
+
                         $messageKey = $this->resolveMessageKey($message);
                         $messageId = (string) ($message['message_id'] ?? '');
                         $priorState = null;
@@ -216,23 +234,6 @@ class MailAssistantRunner
 
                         $message['thread_context'] = $this->messageState->summarizeThread((int) $mailboxSummary['id'], $message);
 
-                        if ($this->isAssistantSentMessage($message)) {
-                            $mailboxSummary['skipped']++;
-                            $mailboxSummary['assistant_sent_skipped']++;
-                            $summary['messages_skipped']++;
-                            $summary['messages_assistant_sent_skipped']++;
-                            $this->recordMessageState($mailboxSummary, $message, 'ignored', 'assistant_sent_marker', $dryRun);
-                            $this->recordMessageResult($mailboxSummary, $message, 'skipped', 'assistant_sent_marker');
-                            $this->logger->info('Message skipped because assistant marker header is present (anti-loop guard).', [
-                                'mailbox' => $mailbox['name'] ?? null,
-                                'uid' => $message['uid'] ?? null,
-                                'message_id' => $message['message_id'] ?? null,
-                            ]);
-                            if (!$dryRun) {
-                                $imap->markSeen((int) $message['uid']);
-                            }
-                            continue;
-                        }
 
                         $spamDecision = $this->evaluateSpamAssassin($message);
                         if (!empty($spamDecision['save_copy'])) {

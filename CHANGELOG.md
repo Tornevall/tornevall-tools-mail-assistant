@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.21 - 2026-04-19
+
+- Local conversation/thread summaries are now built from prior-handled message state and injected into AI request context for matched-rule replies, giving the model awareness of earlier turns in the same thread.
+- `MessageStateStore::summarizeThread()` collects the most recent local state records that share the same thread root (via `in_reply_to` / `references` matching) and passes them as `thread_context.messages` to `generateAiReply`.
+- Added regression test `tests/thread-context-regression.php` to verify that AI receives local prior-reply context when the incoming message is part of an already-handled thread.
+
 ## 0.3.20 - 2026-04-19
 
 - Local `message-state.json` no longer influences unread processing at all; unread IMAP mail is always re-evaluated from IMAP state instead of being skipped because of prior local history.

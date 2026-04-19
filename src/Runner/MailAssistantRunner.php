@@ -692,50 +692,93 @@ class MailAssistantRunner
             ];
         }
 
+        $defaults = (array) ($mailbox['defaults'] ?? []);
+        $noMatchRules = $this->resolveGenericNoMatchRules($mailbox);
+        if (!$noMatchRules) {
+            $this->logger->info('Generic no-match AI fallback skipped: IF condition is missing.', [
+                'mailbox' => $mailbox['name'] ?? null,
+                'uid' => $message['uid'] ?? null,
+                'message_id' => $message['message_id'] ?? null,
+            ]);
+
+            return [
+                'handled' => false,
+                'reason' => 'no_matching_rule_generic_ai_unconfigured',
+                'ai_decision' => [],
+            ];
+        }
+
+        $lastDecision = [];
+        $evaluatedRules = [];
+
         try {
-            $defaults = (array) ($mailbox['defaults'] ?? []);
-            $noMatchRules = $this->resolveGenericNoMatchRules($mailbox);
-            if (!$noMatchRules) {
-                $this->logger->info('Generic no-match AI fallback skipped: IF condition is missing.', [
-                    'mailbox' => $mailbox['name'] ?? null,
-                    'uid' => $message['uid'] ?? null,
-                    'message_id' => $message['message_id'] ?? null,
-                ]);
-
-                return [
-                    'handled' => false,
-                    'reason' => 'no_matching_rule_generic_ai_unconfigured',
-                    'ai_decision' => [],
-                ];
-            }
-
-            $lastDecision = [];
             foreach ($noMatchRules as $noMatchRule) {
-                $aiResult = $this->tools->evaluateGenericNoMatchReply($mailbox, $message, [
-                    'if_condition' => (string) ($noMatchRule['if_condition'] ?? ''),
-                    'reply_instruction' => (string) ($noMatchRule['instruction'] ?? ''),
-                    'ai_model' => (string) ($noMatchRule['ai_model'] ?? (($defaults['generic_no_match_ai_model'] ?? null) ?: '')),
-                    'ai_fallback_model' => (string) (($defaults['generic_no_match_ai_fallback_model'] ?? null) ?: ''),
-                    'ai_reasoning_effort' => (string) ($noMatchRule['ai_reasoning_effort'] ?? (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: '')),
-                ]);
-                $replyText = trim((string) ($aiResult['reply'] ?? ($aiResult['response'] ?? '')));
-                $decision = [
-                    'can_reply' => !empty($aiResult['can_reply']),
-                    'certainty' => (string) ($aiResult['certainty'] ?? ''),
-                    'reason' => (string) ($aiResult['reason'] ?? ''),
-                    'risk_flags' => (array) ($aiResult['risk_flags'] ?? []),
-                    'decision_reason_code' => (string) ($aiResult['decision_reason_code'] ?? ''),
-                    'raw_response' => (string) ($aiResult['raw_response'] ?? ''),
-                    'matched_no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
-                    'matched_no_match_rule_order' => (int) ($noMatchRule['sort_order'] ?? 0),
-                ];
+                try {
+                    $aiResult = $this->tools->evaluateGenericNoMatchReply($mailbox, $message, [
+                        'if_condition' => (string) ($noMatchRule['if_condition'] ?? ''),
+                        'reply_instruction' => (string) ($noMatchRule['instruction'] ?? ''),
+                        'ai_model' => (string) ($noMatchRule['ai_model'] ?? (($defaults['generic_no_match_ai_model'] ?? null) ?: '')),
+                        'ai_fallback_model' => (string) (($defaults['generic_no_match_ai_fallback_model'] ?? null) ?: ''),
+                        'ai_reasoning_effort' => (string) ($noMatchRule['ai_reasoning_effort'] ?? (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: '')),
+                    ]);
+                    $replyText = trim((string) ($aiResult['reply'] ?? ($aiResult['response'] ?? '')));
+                    $decision = [
+                        'can_reply' => !empty($aiResult['can_reply']),
+                        'certainty' => (string) ($aiResult['certainty'] ?? ''),
+                        'reason' => (string) ($aiResult['reason'] ?? ''),
+                        'risk_flags' => (array) ($aiResult['risk_flags'] ?? []),
+                        'decision_reason_code' => (string) ($aiResult['decision_reason_code'] ?? ''),
+                        'raw_response' => (string) ($aiResult['raw_response'] ?? ''),
+                        'matched_no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
+                        'matched_no_match_rule_order' => (int) ($noMatchRule['sort_order'] ?? 0),
+                    ];
+                } catch (Throwable $rowError) {
+                    $decision = [
+                        'can_reply' => false,
+                        'certainty' => 'low',
+                        'reason' => $rowError->getMessage(),
+                        'risk_flags' => ['evaluation_error'],
+                        'decision_reason_code' => 'no_matching_rule_generic_ai_error',
+                        'raw_response' => '',
+                        'matched_no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
+                        'matched_no_match_rule_order' => (int) ($noMatchRule['sort_order'] ?? 0),
+                    ];
+                    $evaluatedRules[] = $this->buildGenericNoMatchRuleDecisionSummary($noMatchRule, $decision);
+                    $lastDecision = $decision;
+
+                    $this->logger->warning('Generic no-match AI row evaluation failed; later active rows will still be tried.', [
+                        'mailbox' => $mailbox['name'] ?? null,
+                        'uid' => $message['uid'] ?? null,
+                        'message_id' => $message['message_id'] ?? null,
+                        'no_match_rule_id' => $noMatchRule['id'] ?? null,
+                        'no_match_rule_order' => $noMatchRule['sort_order'] ?? null,
+                        'error' => $rowError->getMessage(),
+                    ]);
+                    continue;
+                }
+
+                $evaluatedRules[] = $this->buildGenericNoMatchRuleDecisionSummary($noMatchRule, $decision);
                 $lastDecision = $decision;
 
                 if (empty($aiResult['can_reply'])) {
+                    $this->logger->info('Generic no-match AI row rejected this message; later active rows will still be tried if available.', [
+                        'mailbox' => $mailbox['name'] ?? null,
+                        'uid' => $message['uid'] ?? null,
+                        'message_id' => $message['message_id'] ?? null,
+                        'no_match_rule_id' => $noMatchRule['id'] ?? null,
+                        'no_match_rule_order' => $noMatchRule['sort_order'] ?? null,
+                        'decision_reason_code' => $decision['decision_reason_code'] ?? null,
+                        'decision_reason' => $decision['reason'] ?? null,
+                    ]);
                     continue;
                 }
 
                 if (!$this->isGenericAiReplyUsable($replyText)) {
+                    $lastDecision['decision_reason_code'] = (string) ($lastDecision['decision_reason_code'] ?: 'no_matching_rule_generic_ai_empty_reply');
+                    if (trim((string) ($lastDecision['reason'] ?? '')) === '') {
+                        $lastDecision['reason'] = 'Generic no-match AI allowed a reply but did not return usable reply text.';
+                    }
+                    $evaluatedRules[count($evaluatedRules) - 1] = $this->buildGenericNoMatchRuleDecisionSummary($noMatchRule, $lastDecision);
                     $this->logger->info('Generic no-match AI fallback skipped: response not usable.', [
                         'mailbox' => $mailbox['name'] ?? null,
                         'uid' => $message['uid'] ?? null,
@@ -773,6 +816,7 @@ class MailAssistantRunner
                     'matched_no_match_rule_order' => $noMatchRule['sort_order'] ?? null,
                     'post_handle_action' => $finalizeResult['post_handle_action'] ?? null,
                     'post_handle_warning' => $finalizeResult['post_handle_warning'] ?? null,
+                    'evaluated_no_match_rules' => $evaluatedRules,
                 ]);
 
                 return [
@@ -782,7 +826,7 @@ class MailAssistantRunner
                         : 'no_matching_rule_generic_ai_replied',
                     'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
                     'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
-                    'ai_decision' => $decision,
+                    'ai_decision' => $this->attachGenericNoMatchEvaluationTrace($decision, $evaluatedRules),
                     'reply_excerpt' => $this->buildStateExcerpt($replyText, 500),
                 ];
             }
@@ -790,7 +834,7 @@ class MailAssistantRunner
             return [
                 'handled' => false,
                 'reason' => (string) ($lastDecision['decision_reason_code'] ?? 'no_matching_rule_generic_ai_rejected'),
-                'ai_decision' => $lastDecision,
+                'ai_decision' => $this->attachGenericNoMatchEvaluationTrace($lastDecision, $evaluatedRules),
             ];
         } catch (Throwable $e) {
             $this->logger->warning('Generic no-match AI fallback failed.', [
@@ -803,11 +847,32 @@ class MailAssistantRunner
             return [
                 'handled' => false,
                 'reason' => 'no_matching_rule_generic_ai_error',
-                'ai_decision' => [
+                'ai_decision' => $this->attachGenericNoMatchEvaluationTrace([
                     'reason' => $e->getMessage(),
-                ],
+                ], $evaluatedRules),
             ];
         }
+    }
+
+    private function buildGenericNoMatchRuleDecisionSummary(array $noMatchRule, array $decision): array
+    {
+        return [
+            'id' => (int) ($noMatchRule['id'] ?? 0),
+            'sort_order' => (int) ($noMatchRule['sort_order'] ?? 0),
+            'if_condition' => (string) ($noMatchRule['if_condition'] ?? ''),
+            'decision_reason_code' => (string) ($decision['decision_reason_code'] ?? ''),
+            'can_reply' => !empty($decision['can_reply']),
+            'certainty' => (string) ($decision['certainty'] ?? ''),
+            'reason' => (string) ($decision['reason'] ?? ''),
+            'risk_flags' => array_values((array) ($decision['risk_flags'] ?? [])),
+        ];
+    }
+
+    private function attachGenericNoMatchEvaluationTrace(array $decision, array $evaluatedRules): array
+    {
+        $decision['evaluated_no_match_rules'] = array_values($evaluatedRules);
+
+        return $decision;
     }
 
     private function isGenericNoMatchAiEnabled(array $config, array $mailbox): bool

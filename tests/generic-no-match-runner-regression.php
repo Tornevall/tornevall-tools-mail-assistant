@@ -13,6 +13,7 @@ use MailSupportAssistant\Tools\ToolsApiClient;
 final class RejectingGenericNoMatchToolsApiClient extends ToolsApiClient
 {
     private array $config;
+    public array $ruleEvaluations = [];
 
     public function __construct(array $config)
     {
@@ -27,21 +28,31 @@ final class RejectingGenericNoMatchToolsApiClient extends ToolsApiClient
 
     public function evaluateGenericNoMatchReply(array $mailbox, array $message, array $options = []): array
     {
+        $ifCondition = (string) ($options['if_condition'] ?? '');
+        $this->ruleEvaluations[] = $ifCondition;
+
+        $reason = stripos($ifCondition, 'follow-up') !== false
+            ? 'Second unmatched row also rejected the message.'
+            : 'Unsolicited sales mail should not be answered.';
+        $riskFlags = stripos($ifCondition, 'follow-up') !== false
+            ? ['follow_up_reject']
+            : ['unsolicited_sales'];
+
         return [
             'can_reply' => false,
             'certainty' => 'high',
-            'reason' => 'Unsolicited sales mail should not be answered.',
+            'reason' => $reason,
             'decision_reason_code' => 'no_matching_rule_generic_ai_rejected',
             'reply' => '',
             'response' => '',
-            'risk_flags' => ['unsolicited_sales'],
+            'risk_flags' => $riskFlags,
             'raw_response' => '{"can_reply":false}',
             'parsed_decision' => [
                 'valid_json' => true,
                 'can_reply' => false,
                 'certainty' => 'high',
-                'reason' => 'Unsolicited sales mail should not be answered.',
-                'risk_flags' => ['unsolicited_sales'],
+                'reason' => $reason,
+                'risk_flags' => $riskFlags,
                 'reply' => '',
             ],
         ];
@@ -129,8 +140,22 @@ $config = [
             'run_limit' => 20,
             'mark_seen_on_skip' => true,
             'generic_no_match_ai_enabled' => true,
-            'generic_no_match_if' => 'If the unmatched mail is a routine support request that is safe to answer, we may reply.',
-            'generic_no_match_instruction' => 'Answer politely and clearly when safe.',
+            'generic_no_match_rules' => [
+                [
+                    'id' => 41,
+                    'sort_order' => 0,
+                    'is_active' => true,
+                    'if' => 'If the unmatched mail is a routine support request that is safe to answer, we may reply.',
+                    'instruction' => 'Answer politely and clearly when safe.',
+                ],
+                [
+                    'id' => 42,
+                    'sort_order' => 10,
+                    'is_active' => true,
+                    'if' => 'If a later follow-up unmatched row also applies, it should still be evaluated before we give up.',
+                    'instruction' => 'Fallback answer instruction for later row.',
+                ],
+            ],
         ],
         'rules' => [],
     ]],
@@ -154,7 +179,8 @@ $message = [
 $logger = new Logger(makeTempPath('mail-assistant-log', '.log'), makeTempPath('mail-assistant-last-run', '.json'));
 $messageState = new MessageStateStore(makeTempPath('mail-assistant-state', '.json'));
 $imap = new TrackingGenericNoMatchImapMailboxClient([$message]);
-$runner = new TestableGenericNoMatchRunner(new RejectingGenericNoMatchToolsApiClient($config), $logger, $messageState, $imap);
+$tools = new RejectingGenericNoMatchToolsApiClient($config);
+$runner = new TestableGenericNoMatchRunner($tools, $logger, $messageState, $imap);
 $summary = $runner->run(['include_history' => true]);
 
 assertSameValue(1, $summary['messages_skipped'] ?? null, 'Rejected unmatched-mail triage should count as skipped.');
@@ -162,7 +188,11 @@ assertSameValue(0, count($imap->markSeenCalls), 'Rejected unmatched-mail triage 
 assertSameValue([303], $imap->markUnseenCalls, 'Rejected unmatched-mail triage should explicitly keep the message unread when IMAP supports it.');
 assertSameValue('no_matching_rule_generic_ai_rejected', $summary['mailboxes'][0]['message_state_records'][0]['reason'] ?? null, 'Rejected unmatched-mail triage should persist the strict reject reason.');
 assertSameValue('no_matching_rule_generic_ai_rejected', $summary['mailboxes'][0]['message_results'][0]['reason'] ?? null, 'Rejected unmatched-mail triage should also appear in the current-run result summary.');
-assertSameValue(['unsolicited_sales'], $summary['mailboxes'][0]['message_results'][0]['generic_ai_decision']['risk_flags'] ?? null, 'Rejected unmatched-mail triage should preserve AI risk flags for diagnostics.');
+assertSameValue(['follow_up_reject'], $summary['mailboxes'][0]['message_results'][0]['generic_ai_decision']['risk_flags'] ?? null, 'Rejected unmatched-mail triage should preserve the last evaluated row risk flags for diagnostics.');
+assertSameValue(2, count($tools->ruleEvaluations), 'Rejected unmatched-mail triage should still evaluate later active no-match rows before giving up.');
+assertSameValue(2, count($summary['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'] ?? []), 'Rejected unmatched-mail diagnostics should record every evaluated no-match row.');
+assertSameValue(41, $summary['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'][0]['id'] ?? null, 'Expected the first no-match row to be recorded in evaluation diagnostics.');
+assertSameValue(42, $summary['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'][1]['id'] ?? null, 'Expected the later no-match row to be recorded in evaluation diagnostics.');
 
 fwrite(STDOUT, "generic-no-match-runner-regression: ok\n");
 

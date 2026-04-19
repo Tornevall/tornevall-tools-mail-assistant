@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.25 - 2026-04-19
+
+- Generic unmatched fallback rows now keep falling through to later active rows even when an earlier row hits a row-local AI/API evaluation error, instead of aborting the whole unmatched-mail pass immediately.
+- No-match diagnostics now also record `evaluated_no_match_rules[]` so operators can see exactly which unmatched rows were tried, in order, before a reply was sent or the message stayed unread.
+- Added/expanded regression coverage in `tests/generic-no-match-rows-regression.php` and `tests/generic-no-match-runner-regression.php` for both clean reject fallthrough and row-local failure fallthrough.
+
 ## 0.3.24 - 2026-04-19
 
 - Outgoing assistant replies are now stamped with `X-Tornevall-Mail-Assistant: sent`.

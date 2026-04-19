@@ -90,6 +90,7 @@ It is expected to:
 - If a rule matches but no outgoing reply is actually sent, the default-safe behavior is to leave the message unread and
   untouched unless the config explicitly opts into post-handle mutation without reply.
 - Mailbox-level `generic_no_match_*` AI settings are only for the unmatched-mail fallback path and must not replace matched rule AI overrides.
+- Unmatched fallback rows must continue in `sort_order` even if one row is rejected or hits a row-local AI/API evaluation failure; only a real sent reply should stop that unmatched-row loop early.
 - Outer SpamAssassin wrapper prose may be ignored for unmatched-mail AI classification, but SpamAssassin score/tests should still be available as safety/risk hints.
 - Outgoing replies now support `smtp` (default), `php_mail`, `custom_mta`, and `tools_api` transports (
   `MAIL_ASSISTANT_MAIL_TRANSPORT`).
@@ -104,6 +105,7 @@ It is expected to:
 - CLI/manual runs now mirror logger output to stdout by default, so `php run` / `cron-run.sh` should show live progress
   while still saving the persistent log file.
 - Run summaries should include per-message `message_results[]` diagnostics, not only aggregate counters.
+- No-match diagnostics should retain an `evaluated_no_match_rules[]` trace so operators can see which unmatched rows were actually tried and why each one rejected/failed.
 - If reply transport succeeds but IMAP post-handle finalize (`markSeen`, move, delete) fails, the run should surface an
   explicit warning reason such as `rule_matched_replied_imap_finalize_failed` instead of silently pretending the whole
   mailbox mutation finished.

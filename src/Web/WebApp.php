@@ -91,9 +91,9 @@ class WebApp
             'messageCopies' => $messageCopies,
             'ui' => [
                 'overview' => $this->buildOverviewSummary($config, $configError, $lastRun, $messageState, $messageCopies),
-                'activity' => $this->buildLastRunMailboxCards($lastRun, $messageCopies),
+                'activity' => $this->buildLastRunMailboxCards($lastRun, $messageCopies, $config),
                 'history' => $this->buildHistoryMailboxCards($messageState),
-                'config' => $this->buildConfigSummary($config),
+                'config' => $this->buildConfigSummary($config, $configError),
                 'logs' => $this->buildLogSummary($logLines),
             ],
             'imapAvailable' => function_exists('imap_open'),
@@ -158,10 +158,18 @@ class WebApp
         ];
     }
 
-    private function buildLastRunMailboxCards(array $lastRun, array $messageCopies): array
+    private function buildLastRunMailboxCards(array $lastRun, array $messageCopies, array $config = []): array
     {
         $copyIndex = $this->indexMessageCopies($messageCopies);
         $cards = [];
+        $configuredMailboxes = [];
+        foreach ((array) ($config['mailboxes'] ?? []) as $mailbox) {
+            if (!is_array($mailbox)) {
+                continue;
+            }
+
+            $configuredMailboxes[(int) ($mailbox['id'] ?? 0)] = $mailbox;
+        }
 
         foreach ((array) ($lastRun['mailboxes'] ?? []) as $mailbox) {
             if (!is_array($mailbox)) {
@@ -203,17 +211,60 @@ class WebApp
                 ];
             }
 
+            $mailboxId = (int) ($mailbox['id'] ?? 0);
+            $configuredMailbox = $configuredMailboxes[$mailboxId] ?? [];
             $cards[] = [
-                'id' => (int) ($mailbox['id'] ?? 0),
-                'name' => (string) ($mailbox['name'] ?? ''),
+                'id' => $mailboxId,
+                'name' => (string) ($mailbox['name'] ?? (($configuredMailbox['name'] ?? null) ?: '')),
                 'scanned' => (int) ($mailbox['scanned'] ?? 0),
                 'handled' => (int) ($mailbox['handled'] ?? 0),
                 'skipped' => (int) ($mailbox['skipped'] ?? 0),
                 'failed' => (int) ($mailbox['failed'] ?? 0),
                 'assistant_sent_skipped' => (int) ($mailbox['assistant_sent_skipped'] ?? 0),
                 'read_skipped' => (int) ($mailbox['read_skipped'] ?? 0),
+                'imap' => [
+                    'host' => (string) (($configuredMailbox['imap']['host'] ?? null) ?: ''),
+                    'port' => (int) (($configuredMailbox['imap']['port'] ?? null) ?: 0),
+                    'folder' => (string) (($configuredMailbox['imap']['folder'] ?? null) ?: 'INBOX'),
+                    'encryption' => (string) (($configuredMailbox['imap']['encryption'] ?? null) ?: ''),
+                ],
+                'source' => 'last_run',
                 'messages' => $messages,
                 'errors' => array_values((array) ($mailbox['errors'] ?? [])),
+            ];
+        }
+
+        foreach ($configuredMailboxes as $mailboxId => $configuredMailbox) {
+            $alreadyPresent = false;
+            foreach ($cards as $card) {
+                if ((int) ($card['id'] ?? 0) === (int) $mailboxId) {
+                    $alreadyPresent = true;
+                    break;
+                }
+            }
+
+            if ($alreadyPresent) {
+                continue;
+            }
+
+            $cards[] = [
+                'id' => (int) $mailboxId,
+                'name' => (string) (($configuredMailbox['name'] ?? null) ?: 'Mailbox'),
+                'scanned' => 0,
+                'handled' => 0,
+                'skipped' => 0,
+                'failed' => 0,
+                'assistant_sent_skipped' => 0,
+                'read_skipped' => 0,
+                'imap' => [
+                    'host' => (string) (($configuredMailbox['imap']['host'] ?? null) ?: ''),
+                    'port' => (int) (($configuredMailbox['imap']['port'] ?? null) ?: 0),
+                    'folder' => (string) (($configuredMailbox['imap']['folder'] ?? null) ?: 'INBOX'),
+                    'encryption' => (string) (($configuredMailbox['imap']['encryption'] ?? null) ?: ''),
+                ],
+                'source' => 'config_only',
+                'messages' => [],
+                'errors' => [],
             ];
         }
 
@@ -242,7 +293,7 @@ class WebApp
         return $cards;
     }
 
-    private function buildConfigSummary(array $config): array
+    private function buildConfigSummary(array $config, ?string $configError = null): array
     {
         $mailboxes = [];
         foreach ((array) ($config['mailboxes'] ?? []) as $mailbox) {
@@ -266,11 +317,20 @@ class WebApp
                 'defaults' => [
                     'from_name' => (string) ($defaults['from_name'] ?? ''),
                     'from_email' => (string) ($defaults['from_email'] ?? ''),
+                    'bcc' => (string) ($defaults['bcc'] ?? ''),
                     'run_limit' => (int) ($defaults['run_limit'] ?? 0),
                     'footer' => (string) ($defaults['footer'] ?? ''),
+                    'mark_seen_on_skip' => !empty($defaults['mark_seen_on_skip']),
                     'generic_no_match_ai_enabled' => !empty($defaults['generic_no_match_ai_enabled']),
+                    'generic_no_match_ai_model' => (string) ($defaults['generic_no_match_ai_model'] ?? ''),
+                    'generic_no_match_ai_reasoning_effort' => (string) ($defaults['generic_no_match_ai_reasoning_effort'] ?? ''),
+                    'generic_no_match_if' => (string) ($defaults['generic_no_match_if'] ?? ''),
+                    'generic_no_match_instruction' => (string) ($defaults['generic_no_match_instruction'] ?? ''),
+                    'generic_no_match_footer' => (string) ($defaults['generic_no_match_footer'] ?? ''),
                     'spam_score_reply_threshold' => $defaults['spam_score_reply_threshold'] ?? null,
+                    'subject_trim_prefixes' => array_values((array) ($defaults['subject_trim_prefixes'] ?? [])),
                 ],
+                'notes' => (string) ($mailbox['notes'] ?? ''),
                 'rule_count' => count($rules),
                 'no_match_rule_count' => count($noMatchRules),
                 'rules' => array_map(function (array $rule): array {
@@ -281,7 +341,24 @@ class WebApp
                         'match' => (array) ($rule['match'] ?? []),
                         'reply_enabled' => !empty($rule['reply']['enabled']),
                         'ai_enabled' => !empty($rule['reply']['ai_enabled']),
+                        'reply' => [
+                            'subject_prefix' => (string) (($rule['reply']['subject_prefix'] ?? null) ?: ''),
+                            'from_name' => (string) (($rule['reply']['from_name'] ?? null) ?: ''),
+                            'from_email' => (string) (($rule['reply']['from_email'] ?? null) ?: ''),
+                            'bcc' => (string) (($rule['reply']['bcc'] ?? null) ?: ''),
+                            'template_text' => (string) (($rule['reply']['template_text'] ?? null) ?: ''),
+                            'footer_mode' => (string) (($rule['reply']['footer_mode'] ?? null) ?: ''),
+                            'footer_text' => (string) (($rule['reply']['footer_text'] ?? null) ?: ''),
+                            'responder_name' => (string) (($rule['reply']['responder_name'] ?? null) ?: ''),
+                            'persona_profile' => (string) (($rule['reply']['persona_profile'] ?? null) ?: ''),
+                            'mood' => (string) (($rule['reply']['mood'] ?? null) ?: ''),
+                            'custom_instruction' => (string) (($rule['reply']['custom_instruction'] ?? null) ?: ''),
+                            'ai_model' => (string) (($rule['reply']['ai_model'] ?? null) ?: ''),
+                            'ai_reasoning_effort' => (string) (($rule['reply']['ai_reasoning_effort'] ?? null) ?: ''),
+                        ],
+                        'subject_trim_prefixes' => array_values((array) ($rule['subject_trim_prefixes'] ?? [])),
                         'post_handle' => (array) ($rule['post_handle'] ?? []),
+                        'fallback_rule' => (array) ($rule['fallback_rule'] ?? []),
                     ];
                 }, $rules),
                 'no_match_rules' => array_map(function (array $row): array {
@@ -290,6 +367,9 @@ class WebApp
                         'sort_order' => (int) ($row['sort_order'] ?? 0),
                         'if' => (string) (($row['if'] ?? null) ?: ($row['if_condition'] ?? null) ?: ''),
                         'instruction' => (string) ($row['instruction'] ?? ''),
+                        'footer' => (string) ($row['footer'] ?? ''),
+                        'ai_model' => (string) ($row['ai_model'] ?? ''),
+                        'ai_reasoning_effort' => (string) ($row['ai_reasoning_effort'] ?? ''),
                         'is_active' => !array_key_exists('is_active', $row) || !empty($row['is_active']),
                     ];
                 }, $noMatchRules),
@@ -297,6 +377,8 @@ class WebApp
         }
 
         return [
+            'error' => $configError,
+            'empty_reason' => $configError ?: (empty($mailboxes) ? 'No active Tools mailboxes are visible for this token owner yet.' : ''),
             'user' => is_array($config['user'] ?? null) ? $config['user'] : [],
             'token' => is_array($config['token'] ?? null) ? $config['token'] : [],
             'mailboxes' => $mailboxes,
@@ -455,6 +537,9 @@ class WebApp
     private function handleAjax(string $method): void
     {
         $action = strtolower($this->requestParam('ajax', 'dashboard'));
+        if ($action === 'refresh') {
+            $action = 'dashboard';
+        }
 
         try {
             if ($action === 'dashboard') {

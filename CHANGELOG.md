@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.32 - 2026-04-20
+
+- The standalone dashboard's **Refresh dashboard** button now calls the supported dashboard reload path again instead of failing with `Unknown ajax action.`.
+- The activity tab now shows configured mailbox cards even before a dry-run/real run has saved any per-message activity, and it explicitly explains that this view is a latest-run operator inbox rather than a live IMAP mail client.
+- The Tools config tab now exposes the readable matched-rule rows, fallback rule details, and unmatched AI/IF row settings (including footer, AI model, and reasoning effort) instead of forcing operators to dig only in raw JSON.
+- Added regression coverage in `tests/dashboard-config-visibility-regression.php` for config-only mailbox visibility plus the richer dashboard config summary fields.
+
 ## 0.3.31 - 2026-04-20
 
 - Clear-text contact-form style inbound mails that begin with structured lines such as `From:`, `Subject:`, `Sender IP:`, and `Message Body:` no longer get truncated to only the first header-like line during reply-aware parsing.

@@ -140,8 +140,9 @@ Current UI features:
 - AJAX self-test action
 - AJAX-triggered safe dry-run action (reuses the same PHP runner as CLI)
 - mail-client-style activity cards for the latest run instead of only raw JSON blocks
+- configured mailboxes are now still shown in the activity tab even before any saved run exists, with an explicit note that this is a latest-run operator view and not a live IMAP browser yet
 - expandable per-message diagnostics showing selected rule/no-match decision, thread metadata, and optional saved local headers
-- human-readable Tools config summary (mailboxes, rule counts, unmatched fallback rows) with raw JSON still available under collapsible advanced sections
+- human-readable Tools config summary (mailboxes, rule counts, matched rule rows, fallback-rule details, and unmatched AI/IF rows) with raw JSON still available under collapsible advanced sections
 - optional local message-history summary from `storage/state/message-state.json` when history mode has been requested previously
 - recent local saved message copies are now reused as body/header preview sources when available, so header inspection becomes possible without turning the dashboard into a full IMAP admin surface
 - direct link back to Tools admin
@@ -151,7 +152,7 @@ Current UI features:
 
 - **Cron/manual execution should still use PHP CLI**: `php run ...`
 - The web UI calls the same runner class for manual checks and dry-runs, but it is intended as an operator surface, not as the primary cron transport.
-- The dashboard is now intentionally a lightweight operator inbox, not a full standalone admin clone of Tools. Mailbox/rule administration should still happen primarily in Tools, while the local UI focuses on inspection, diagnostics, and future lightweight manual handling.
+- The dashboard is now intentionally a lightweight operator inbox, not a full standalone admin clone of Tools or a full live IMAP mail client. Mailbox/rule administration should still happen primarily in Tools, while the local UI focuses on inspection, diagnostics, and future lightweight manual handling.
 
 ## Cron example
 

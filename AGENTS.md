@@ -29,6 +29,7 @@ It is expected to:
 - `src/Mail/MimeDecoder.php` - subject/body decoding helpers
 - `src/Runner/MailAssistantRunner.php` - orchestration logic
 - `src/Web/WebApp.php` - env-login dashboard
+- `tests/dashboard-config-visibility-regression.php` - verifies the dashboard still shows config-only mailbox cards before any saved run exists and that readable matched-rule / unmatched-row AI fields stay exposed in the config summary
 - `src/Support/MessageStateStore.php` - optional local message-history storage under `storage/state/message-state.json` when history mode is requested
 - `tests/generic-no-match-json-regression.php` - strict JSON allow/deny parsing coverage for unmatched-mail AI
 - `tests/generic-no-match-runner-regression.php` - runner-level guard that rejected unmatched-mail AI decisions stay unread
@@ -59,6 +60,8 @@ It is expected to:
   classes instead of inventing a second execution stack. In many deployments it does not need to be public at all
   because Tools already hosts the real config surface.
 - The standalone dashboard should now prefer a human-readable operator inbox over raw JSON dumps: mailbox/message cards, expandable diagnostics, optional local-header visibility from saved message copies, and lightweight continuity inspection. It is still **not** the place where the full mailbox/rule admin model should be duplicated; keep heavy admin/config in Tools.
+- The dashboard's activity tab should still list configured mailboxes even before any dry-run/real run has produced message cards, while clearly stating that this surface shows latest-run activity rather than a full live IMAP mail client.
+- The dashboard's config tab should keep readable matched-rule rows, fallback-rule details, and unmatched AI/IF rows visible so operators do not have to reverse-engineer the raw JSON to understand what Tools actually sent to the standalone runner.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is
   limited to `.env`, sessions, logs, last-run summaries, and optional message copies in `storage/`.
 - Handled or explicitly ignored mail may still be recorded locally by normalized `Message-Id`, but only when history

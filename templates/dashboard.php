@@ -57,9 +57,10 @@
         .tab-btn.active { background:var(--primary); color:#fff; border-color:var(--primary); }
         .tab-panel { display:none; }
         .tab-panel.active { display:block; }
-        .mailbox-list, .history-list, .config-list, .log-list { display:grid; gap:16px; }
+        .mailbox-list, .history-list, .config-list, .log-list, .rule-list { display:grid; gap:16px; }
         .mailbox-card, .history-card, .config-card, .log-card { padding:18px; }
         .mailbox-head, .history-head, .config-head { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center; margin-bottom:12px; }
+        .section-head { display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:center; margin:16px 0 10px; }
         .stats-row, .pill-row { display:flex; gap:8px; flex-wrap:wrap; }
         .stat-pill, .pill { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px; font-size:.82rem; font-weight:700; }
         .stat-pill { background:#e0f2fe; color:#1d4ed8; }
@@ -74,6 +75,12 @@
         .message-meta { color:var(--muted); font-size:.9rem; display:grid; gap:4px; }
         .message-excerpt { margin:14px 0 0; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; color:#1e293b; white-space:pre-wrap; }
         .message-actions-note { margin-top:12px; padding:12px 14px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:12px; color:#1d4ed8; font-size:.92rem; }
+        .info-note { margin-top:12px; padding:12px 14px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; color:#334155; font-size:.92rem; }
+        .rule-card { padding:14px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
+        .rule-card h3 { margin:0; font-size:1rem; }
+        .rule-card p { margin:.45rem 0 0; }
+        .subtle-list { display:grid; gap:10px; margin-top:12px; }
+        .text-block { margin-top:10px; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; white-space:pre-wrap; }
         details { border:1px solid #e2e8f0; border-radius:12px; padding:10px 12px; background:#fff; }
         details + details { margin-top:10px; }
         summary { cursor:pointer; font-weight:700; }
@@ -150,7 +157,7 @@
     <div class="summary-grid" id="summary-grid"></div>
 
     <div class="tabs">
-        <button class="tab-btn active" type="button" data-tab="activity">Inbox activity</button>
+        <button class="tab-btn active" type="button" data-tab="activity">Latest run / inbox activity</button>
         <button class="tab-btn" type="button" data-tab="history">Local history</button>
         <button class="tab-btn" type="button" data-tab="config">Tools config</button>
         <button class="tab-btn" type="button" data-tab="logs">Logs & raw</button>
@@ -229,6 +236,17 @@
                 <div class="v">${escapeHtml(pair.value ?? '')}</div>
             </div>
         `).join('')}</div>`;
+    };
+
+    const renderTextBlock = (label, value) => {
+        const normalized = String(value || '').trim();
+        if (!normalized) return '';
+        return `
+            <div>
+                <div class="k">${escapeHtml(label)}</div>
+                <div class="text-block">${escapeHtml(normalized)}</div>
+            </div>
+        `;
     };
 
     const toneClass = (tone) => {
@@ -334,7 +352,7 @@
     const renderActivity = (mailboxes) => {
         if (!activityPanel) return;
         if (!Array.isArray(mailboxes) || !mailboxes.length) {
-            activityPanel.innerHTML = '<div class="empty">No saved run activity yet. Use dry-run or a real run first.</div>';
+            activityPanel.innerHTML = '<div class="empty">No saved run activity yet. This panel is a latest-run operator inbox, not a live IMAP browser. Use dry-run or a real run first.</div>';
             return;
         }
 
@@ -344,6 +362,9 @@
                     <div>
                         <h2 style="margin:0;">${escapeHtml(mailbox.name || 'Mailbox')}</h2>
                         <div class="muted">Mailbox #${escapeHtml(mailbox.id || '')}</div>
+                        ${(mailbox.imap && mailbox.imap.host)
+                            ? `<div class="muted">IMAP ${escapeHtml(mailbox.imap.host || '')}:${escapeHtml(mailbox.imap.port || '')} / ${escapeHtml(mailbox.imap.folder || 'INBOX')}</div>`
+                            : ''}
                     </div>
                     <div class="stats-row">
                         <span class="stat-pill">scanned ${escapeHtml(mailbox.scanned)}</span>
@@ -352,9 +373,12 @@
                         <span class="stat-pill">failed ${escapeHtml(mailbox.failed)}</span>
                     </div>
                 </div>
+                ${mailbox.source === 'config_only'
+                    ? '<div class="info-note">No saved run has touched this mailbox yet. The dashboard can show that the mailbox exists in Tools config, but it only becomes a readable inbox-style activity view after a dry-run or real polling pass records message results.</div>'
+                    : '<div class="info-note">This is the latest saved run for this mailbox. The standalone dashboard is intentionally a lightweight operator inbox, not a live IMAP mail client.</div>'}
                 ${Array.isArray(mailbox.messages) && mailbox.messages.length
                     ? `<div class="message-list">${mailbox.messages.map(renderMessageCard).join('')}</div>`
-                    : '<div class="empty">No per-message activity recorded.</div>'}
+                    : '<div class="empty">No per-message activity recorded for this mailbox yet.</div>'}
                 ${Array.isArray(mailbox.errors) && mailbox.errors.length ? renderJsonDetails('Mailbox errors', mailbox.errors) : ''}
             </section>
         `).join('');
@@ -387,12 +411,83 @@
         `).join('');
     };
 
+    const renderRuleCard = (rule) => {
+        const reply = getObject(rule.reply);
+        const postHandle = getObject(rule.post_handle);
+        const fallbackRule = getObject(rule.fallback_rule);
+        const match = getObject(rule.match);
+        return `
+            <article class="rule-card">
+                <div class="section-head" style="margin-top:0;">
+                    <div>
+                        <h3>${escapeHtml(rule.name || 'Rule')}</h3>
+                        <div class="muted">Rule #${escapeHtml(rule.id || '')} · sort ${escapeHtml(rule.sort_order || 0)}</div>
+                    </div>
+                    <div class="pill-row">
+                        <span class="pill ${rule.reply_enabled ? 'pill-success' : 'pill-muted'}">reply ${rule.reply_enabled ? 'enabled' : 'disabled'}</span>
+                        <span class="pill ${rule.ai_enabled ? 'pill-success' : 'pill-muted'}">AI ${rule.ai_enabled ? 'enabled' : 'disabled'}</span>
+                    </div>
+                </div>
+                ${renderKvGrid([
+                    { label: 'From contains', value: match.from_contains || '' },
+                    { label: 'To contains', value: match.to_contains || '' },
+                    { label: 'Subject contains', value: match.subject_contains || '' },
+                    { label: 'Body contains', value: match.body_contains || '' },
+                    { label: 'Reply subject prefix', value: reply.subject_prefix || '' },
+                    { label: 'Reply from', value: [reply.from_name || '', reply.from_email || ''].filter(Boolean).join(' <') + ([reply.from_name, reply.from_email].every(Boolean) ? '>' : '') },
+                    { label: 'BCC', value: reply.bcc || '' },
+                    { label: 'Footer mode', value: reply.footer_mode || '' },
+                    { label: 'Footer text', value: reply.footer_text || '' },
+                    { label: 'Responder', value: reply.responder_name || '' },
+                    { label: 'Persona', value: reply.persona_profile || '' },
+                    { label: 'Mood', value: reply.mood || '' },
+                    { label: 'AI model', value: reply.ai_model || '' },
+                    { label: 'Reasoning', value: reply.ai_reasoning_effort || '' },
+                    { label: 'Move to folder', value: postHandle.move_to_folder || '' },
+                    { label: 'Delete after handle', value: postHandle.delete_after_handle ? 'Yes' : 'No' },
+                    { label: 'Fallback enabled', value: fallbackRule.enabled ? 'Yes' : 'No' },
+                    { label: 'Fallback AI model', value: fallbackRule.ai_model || '' },
+                    { label: 'Fallback reasoning', value: fallbackRule.ai_reasoning_effort || '' },
+                    { label: 'Subject trim prefixes', value: Array.isArray(rule.subject_trim_prefixes) ? rule.subject_trim_prefixes.join(', ') : '' },
+                ].filter((row) => String(row.value || '').trim() !== ''))}
+                ${renderTextBlock('Static template text', reply.template_text || '')}
+                ${renderTextBlock('Custom instruction', reply.custom_instruction || '')}
+                ${renderTextBlock('Fallback IF condition', fallbackRule.if_condition || '')}
+                ${renderTextBlock('Fallback instruction', fallbackRule.instruction || '')}
+            </article>
+        `;
+    };
+
+    const renderNoMatchRuleCard = (row) => `
+        <article class="rule-card">
+            <div class="section-head" style="margin-top:0;">
+                <div>
+                    <h3>Unmatched row #${escapeHtml(row.id || '')}</h3>
+                    <div class="muted">sort ${escapeHtml(row.sort_order || 0)}</div>
+                </div>
+                <div class="pill-row">
+                    <span class="pill ${row.is_active ? 'pill-success' : 'pill-muted'}">${row.is_active ? 'active' : 'inactive'}</span>
+                    ${row.ai_model ? `<span class="pill pill-muted">AI ${escapeHtml(row.ai_model)}</span>` : ''}
+                    ${row.ai_reasoning_effort ? `<span class="pill pill-muted">${escapeHtml(row.ai_reasoning_effort)}</span>` : ''}
+                </div>
+            </div>
+            ${renderTextBlock('IF condition', row.if || '')}
+            ${renderTextBlock('Instruction', row.instruction || '')}
+            ${renderKvGrid([
+                { label: 'Footer', value: row.footer || '' },
+                { label: 'AI model', value: row.ai_model || '' },
+                { label: 'Reasoning', value: row.ai_reasoning_effort || '' },
+            ].filter((entry) => String(entry.value || '').trim() !== ''))}
+        </article>
+    `;
+
     const renderConfig = (configSummary) => {
         if (!configSummaryPanel) return;
         const configData = getObject(configSummary);
         const mailboxes = Array.isArray(configData.mailboxes) ? configData.mailboxes : [];
+        const emptyReason = String(configData.empty_reason || configData.error || '').trim();
         if (!mailboxes.length) {
-            configSummaryPanel.innerHTML = '<div class="empty">No Tools config summary available.</div>';
+            configSummaryPanel.innerHTML = `<div class="empty">${escapeHtml(emptyReason || 'No Tools config summary available.')}</div>`;
             return;
         }
 
@@ -402,8 +497,9 @@
         const tokenBlock = isPlainObject(configData.token) && Object.keys(configData.token).length
             ? renderJsonDetails('Resolved token', configData.token)
             : '';
+        const intro = `<div class="info-note">This tab mirrors the currently visible Tools config for the active standalone token. Mailboxes/rules are still edited in Tools admin; the standalone dashboard shows what the runner can currently see and use.</div>`;
 
-        configSummaryPanel.innerHTML = `${userBlock}${tokenBlock}${mailboxes.map((mailbox) => `
+        configSummaryPanel.innerHTML = `${intro}${userBlock}${tokenBlock}${mailboxes.map((mailbox) => `
             <section class="config-card">
                 <div class="config-head">
                     <div>
@@ -418,12 +514,36 @@
                 ${renderKvGrid([
                     { label: 'From name', value: (mailbox.defaults || {}).from_name || '' },
                     { label: 'From email', value: (mailbox.defaults || {}).from_email || '' },
+                    { label: 'Default BCC', value: (mailbox.defaults || {}).bcc || '' },
                     { label: 'Run limit', value: (mailbox.defaults || {}).run_limit || '' },
+                    { label: 'Mark seen on skip', value: (mailbox.defaults || {}).mark_seen_on_skip ? 'Yes' : 'No' },
                     { label: 'No-match AI', value: (mailbox.defaults || {}).generic_no_match_ai_enabled ? 'Enabled' : 'Disabled' },
+                    { label: 'No-match AI model', value: (mailbox.defaults || {}).generic_no_match_ai_model || '' },
+                    { label: 'No-match reasoning', value: (mailbox.defaults || {}).generic_no_match_ai_reasoning_effort || '' },
                     { label: 'Reply spam threshold', value: (mailbox.defaults || {}).spam_score_reply_threshold ?? '' },
-                ])}
-                ${renderJsonDetails('Matched rules', mailbox.rules || [])}
-                ${renderJsonDetails('Unmatched fallback rows', mailbox.no_match_rules || [])}
+                    { label: 'Generic IF alias', value: (mailbox.defaults || {}).generic_no_match_if || '' },
+                    { label: 'Generic footer alias', value: (mailbox.defaults || {}).generic_no_match_footer || '' },
+                    { label: 'Subject trim prefixes', value: Array.isArray((mailbox.defaults || {}).subject_trim_prefixes) ? (mailbox.defaults || {}).subject_trim_prefixes.join(', ') : '' },
+                ].filter((entry) => String(entry.value || '').trim() !== ''))}
+                ${renderTextBlock('Default footer', (mailbox.defaults || {}).footer || '')}
+                ${renderTextBlock('Generic unmatched instruction alias', (mailbox.defaults || {}).generic_no_match_instruction || '')}
+                ${renderTextBlock('Mailbox notes', mailbox.notes || '')}
+                <div class="section-head">
+                    <h3 style="margin:0;">Matched rule rows</h3>
+                    <div class="muted">These are the Tools rule rows the standalone runner can currently use.</div>
+                </div>
+                ${Array.isArray(mailbox.rules) && mailbox.rules.length
+                    ? `<div class="rule-list">${mailbox.rules.map(renderRuleCard).join('')}</div>`
+                    : '<div class="empty">No active matched rules are visible for this mailbox.</div>'}
+                <div class="section-head">
+                    <h3 style="margin:0;">Unmatched AI / IF rows</h3>
+                    <div class="muted">Ordered generic_no_match_rules[] rows from Tools.</div>
+                </div>
+                ${Array.isArray(mailbox.no_match_rules) && mailbox.no_match_rules.length
+                    ? `<div class="rule-list">${mailbox.no_match_rules.map(renderNoMatchRuleCard).join('')}</div>`
+                    : '<div class="empty">No active unmatched fallback IF rows are visible for this mailbox.</div>'}
+                ${renderJsonDetails('Matched rules (raw JSON)', mailbox.rules || [])}
+                ${renderJsonDetails('Unmatched fallback rows (raw JSON)', mailbox.no_match_rules || [])}
             </section>
         `).join('')}`;
     };

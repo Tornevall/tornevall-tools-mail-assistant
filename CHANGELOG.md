@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.26 - 2026-04-20
+
+- Expanded the standalone `README.md` with a clearer requirements section covering the real Tools-side prerequisites: Tools account, `/admin/mail-support-assistant` access, active personal client token, mailbox config, OpenAI approval when AI is used, and optional relay token/permission.
+- Added a practical pre-flight checklist for first real runs, plus explicit note that a working outbound mail transport must exist.
+- Added direct GitHub ticket guidance for bugs, feature requests, and setup/support questions: <https://github.com/Tornevall/tornevall-tools-mail-assistant>.
+
 ## 0.3.25 - 2026-04-19
 
 - Generic unmatched fallback rows now keep falling through to later active rows even when an earlier row hits a row-local AI/API evaluation error, instead of aborting the whole unmatched-mail pass immediately.

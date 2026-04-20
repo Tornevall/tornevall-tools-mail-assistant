@@ -29,6 +29,33 @@ The project is **not** a Laravel app and must stay runnable as plain PHP.
 - `ext-session`
 - `ext-imap` recommended for real mailbox handling
 
+### Tools-side prerequisites
+
+This standalone client depends on a real Tools setup. Before it can do useful work, you need:
+
+- a real **Tools / ToolsAPI account** on the Tools host you want to use
+- access to `/admin/mail-support-assistant`
+- at least one configured mailbox in Tools admin
+- a personal active `provider_mail_support_assistant` token
+- that token marked AI-capable (`is_ai=1`)
+- approved `provider_openai` access for the token owner if any mailbox/rule uses AI and the owner is not admin
+
+Optional, depending on delivery mode:
+
+- a personal active `provider_mail_support_assistant_mailer` token if you want to send replies through Tools relay
+- permission `mail-support-assistant.relay` for that relay-token owner when relay should be available to non-admin users
+
+### Local runtime prerequisites
+
+- writable `storage/` for logs, summaries, and optional local state/history
+- network reachability to the Tools base URL configured in `.env`
+- working IMAP mailbox credentials stored in Tools admin
+- one outbound mail strategy that actually exists in your environment:
+  - direct SMTP
+  - local PHP `mail()`
+  - a custom MTA command
+  - or the Tools relay endpoint
+
 Without `ext-imap`, the project still boots and the UI works, but real mailbox polling will fail with a clear runtime message.
 
 ## Setup
@@ -37,6 +64,7 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
 2. Set:
    - `MAIL_ASSISTANT_WEB_USER`
    - `MAIL_ASSISTANT_WEB_PASSWORD`
+   - `MAIL_ASSISTANT_TOOLS_BASE_URL`
    - `MAIL_ASSISTANT_TOOLS_TOKEN`
    - optional dedicated relay token: `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`
    - optional: `MAIL_ASSISTANT_SPAMASSASSIN_SKIP_SCORE` and `MAIL_ASSISTANT_SPAMASSASSIN_COPY_SCORE`
@@ -52,9 +80,22 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API` (`true|false`)
    - optional no-match fallback gate: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1` (kept off by default unless enabled in Tools config or env)
 3. In Tools admin, open `/admin/mail-support-assistant`
-4. Create mailbox/rule config
+4. Create mailbox/rule config there first (mailboxes, rules, unmatched fallback rows, sender defaults)
 5. Generate or rotate a personal `provider_mail_support_assistant` token there
 6. Paste that token into this project's `.env`
+7. If you plan to use Tools relay for outgoing mail, also generate/rotate `provider_mail_support_assistant_mailer` and set `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`
+8. Verify that your chosen outbound transport really exists locally or in Tools before the first real run
+
+### Minimum checklist before first real run
+
+- [ ] Tools account exists and can access `/admin/mail-support-assistant`
+- [ ] At least one mailbox exists in Tools admin
+- [ ] `MAIL_ASSISTANT_TOOLS_BASE_URL` points to the correct Tools host
+- [ ] `MAIL_ASSISTANT_TOOLS_TOKEN` is valid and active
+- [ ] IMAP credentials are correct in Tools admin
+- [ ] The chosen outbound transport is configured
+- [ ] `storage/` is writable
+- [ ] If AI is enabled, the token owner has approved OpenAI access in Tools
 
 ### Where mailbox credentials are stored
 
@@ -114,6 +155,12 @@ Current UI features:
 cd /path/to/mail-support-assistant
 php run --limit=10 >> storage/logs/cron.log 2>&1
 ```
+
+## Support / changes / tickets
+
+Use GitHub tickets for bugs, feature requests, setup clarifications, and standalone runtime issues:
+
+- <https://github.com/Tornevall/tornevall-tools-mail-assistant>
 
 ## AI behavior
 

@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.3.28 - 2026-04-20
+
+- Reply continuity is now more tolerant of older/malformed follow-ups: if `In-Reply-To` / `References` are missing or unusable, the standalone runner can fall back to normalized subject + same participants (`from` / `to`) before it gives up as no-match.
+- Standalone replies now generate and persist an explicit outgoing `reply_message_id`, so later follow-ups that reference the assistant's own sent mail can be linked back to the earlier handled conversation more reliably.
+- Local thread-history matching now normalizes Message-Id-style values more strictly (including angle-bracket stripping), which makes stored continuity hints behave more like real mail headers.
+- Added regression coverage in `tests/reply-chain-subject-fallback-regression.php` and `tests/reply-chain-reply-message-id-regression.php`.
+
+## 0.3.27 - 2026-04-20
+
+- Reply-chain follow-ups can now reuse the previously handled matched rule when `In-Reply-To` / `References` link the new unread message to an earlier handled conversation in local message-state.
+- Reply-chain follow-ups that were previously handled through unmatched-mail AI can now also prioritize the earlier `generic_no_match_rules[]` row first, instead of always restarting from the first unmatched row and potentially rejecting a shorter follow-up.
+- Local thread summaries sent to AI now also include prior selected-rule / matched-no-match-rule metadata, which gives the model clearer continuity context for follow-up questions.
+- Added regression coverage in `tests/reply-chain-rule-reuse-regression.php` and `tests/reply-chain-generic-no-match-reuse-regression.php`.
+
 ## 0.3.26 - 2026-04-20
 
 - Expanded the standalone `README.md` with a clearer requirements section covering the real Tools-side prerequisites: Tools account, `/admin/mail-support-assistant` access, active personal client token, mailbox config, OpenAI approval when AI is used, and optional relay token/permission.

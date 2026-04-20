@@ -2,6 +2,8 @@
 
 namespace MailSupportAssistant\Support;
 
+use MailSupportAssistant\Mail\MimeDecoder;
+
 class MessageStateStore
 {
     private string $stateFile;
@@ -125,6 +127,7 @@ class MessageStateStore
                     $summary = [
                         'message_id' => (string) ($message['message_id'] ?? ''),
                         'message_key' => (string) ($message['message_key'] ?? ''),
+                        'reply_message_id' => (string) ($message['reply_message_id'] ?? ''),
                         'status' => (string) ($message['status'] ?? ''),
                         'reason' => (string) ($message['reason'] ?? ''),
                         'subject' => (string) ($message['subject'] ?? ''),
@@ -147,6 +150,7 @@ class MessageStateStore
                     $summary = [
                         'message_id' => (string) ($message['message_id'] ?? ''),
                         'message_key' => (string) ($message['message_key'] ?? ''),
+                        'reply_message_id' => (string) ($message['reply_message_id'] ?? ''),
                         'status' => (string) ($message['status'] ?? ''),
                         'reason' => (string) ($message['reason'] ?? ''),
                         'subject' => (string) ($message['subject'] ?? ''),
@@ -213,6 +217,10 @@ class MessageStateStore
             return false;
         }));
 
+        if (!count($threadMessages)) {
+            $threadMessages = $this->findSubjectParticipantContinuityMatches($messages, $message);
+        }
+
         usort($threadMessages, static function (array $a, array $b): int {
             return strcmp((string) ($a['recorded_at'] ?? ''), (string) ($b['recorded_at'] ?? ''));
         });
@@ -222,8 +230,9 @@ class MessageStateStore
         }
 
         $threadMessages = array_values(array_map(static function (array $record): array {
-            return [
+            $summary = [
                 'message_id' => (string) ($record['message_id'] ?? ''),
+                'reply_message_id' => (string) ($record['reply_message_id'] ?? ''),
                 'status' => (string) ($record['status'] ?? ''),
                 'reason' => (string) ($record['reason'] ?? ''),
                 'subject' => (string) ($record['subject'] ?? ''),
@@ -234,12 +243,83 @@ class MessageStateStore
                 'body_excerpt' => (string) ($record['body_excerpt'] ?? ''),
                 'reply_excerpt' => (string) ($record['reply_excerpt'] ?? ''),
             ];
+
+            if (is_array($record['selected_rule'] ?? null)) {
+                $summary['selected_rule'] = [
+                    'id' => (int) ($record['selected_rule']['id'] ?? 0),
+                    'name' => (string) ($record['selected_rule']['name'] ?? ''),
+                    'sort_order' => (int) ($record['selected_rule']['sort_order'] ?? 0),
+                ];
+            }
+
+            if (is_array($record['generic_ai_decision'] ?? null)) {
+                $summary['generic_ai_decision'] = [
+                    'matched_no_match_rule_id' => (int) ($record['generic_ai_decision']['matched_no_match_rule_id'] ?? 0),
+                    'matched_no_match_rule_order' => (int) ($record['generic_ai_decision']['matched_no_match_rule_order'] ?? 0),
+                    'decision_reason_code' => (string) ($record['generic_ai_decision']['decision_reason_code'] ?? ''),
+                    'reason' => (string) ($record['generic_ai_decision']['reason'] ?? ''),
+                ];
+            }
+
+            return $summary;
         }, $threadMessages));
 
         return [
             'thread_key' => $threadKey,
             'messages' => $threadMessages,
         ];
+    }
+
+    public function findLatestThreadHandlingRecord(int $mailboxId, array $message): ?array
+    {
+        if ($mailboxId < 1) {
+            return null;
+        }
+
+        $state = $this->load();
+        $messages = array_values((array) ($state['mailboxes'][(string) $mailboxId]['messages'] ?? []));
+        $threadLinks = $this->resolveExplicitThreadLinksFromMessage($message);
+        $matchingRecords = array_values(array_filter($messages, function (array $record) use ($threadLinks): bool {
+            if (!count($threadLinks)) {
+                return false;
+            }
+
+            return $this->recordHasReusableHandling($record)
+                && $this->recordMatchesThreadLinks($record, $threadLinks);
+        }));
+
+        if (count($matchingRecords)) {
+            usort($matchingRecords, static function (array $a, array $b): int {
+                return strcmp((string) ($b['recorded_at'] ?? ''), (string) ($a['recorded_at'] ?? ''));
+            });
+
+            $record = $matchingRecords[0] ?? null;
+            if (is_array($record)) {
+                $record['thread_match_mode'] = 'explicit_links';
+            }
+
+            return $record;
+        }
+
+        $fallbackMatches = array_values(array_filter(
+            $this->findSubjectParticipantContinuityMatches($messages, $message),
+            fn (array $record): bool => $this->recordHasReusableHandling($record)
+        ));
+
+        if (!count($fallbackMatches)) {
+            return null;
+        }
+
+        usort($fallbackMatches, static function (array $a, array $b): int {
+            return strcmp((string) ($b['recorded_at'] ?? ''), (string) ($a['recorded_at'] ?? ''));
+        });
+
+        $record = $fallbackMatches[0] ?? null;
+        if (is_array($record)) {
+            $record['thread_match_mode'] = 'subject_participants';
+        }
+
+        return $record;
     }
 
     private function load(): array
@@ -266,7 +346,180 @@ class MessageStateStore
 
     private function normalizeKey(string $messageKey): string
     {
-        return strtolower(trim($messageKey));
+        return strtolower(trim($messageKey, "<> \t\n\r\0\x0B"));
+    }
+
+    private function resolveExplicitThreadLinksFromMessage(array $message): array
+    {
+        $links = [];
+
+        $inReplyTo = $this->normalizeKey((string) ($message['in_reply_to'] ?? ''));
+        if ($inReplyTo !== '') {
+            $links[$inReplyTo] = true;
+        }
+
+        foreach ((array) ($message['references'] ?? []) as $reference) {
+            $normalized = $this->normalizeKey((string) $reference);
+            if ($normalized !== '') {
+                $links[$normalized] = true;
+            }
+        }
+
+        $messageId = $this->normalizeKey((string) ($message['message_id'] ?? ''));
+        if ($messageId !== '') {
+            $links[$messageId] = true;
+        }
+
+        return array_keys($links);
+    }
+
+    private function recordHasReusableHandling(array $record): bool
+    {
+        if ($this->normalizeKey((string) ($record['status'] ?? '')) !== 'handled') {
+            return false;
+        }
+
+        if ($this->extractSelectedRuleId($record) > 0) {
+            return true;
+        }
+
+        return $this->extractMatchedNoMatchRuleId($record) > 0;
+    }
+
+    private function recordMatchesThreadLinks(array $record, array $threadLinks): bool
+    {
+        $candidates = [];
+
+        foreach (['message_id', 'reply_message_id', 'thread_key', 'in_reply_to'] as $field) {
+            $value = $this->normalizeKey((string) ($record[$field] ?? ''));
+            if ($value !== '') {
+                $candidates[$value] = true;
+            }
+        }
+
+        foreach ((array) ($record['references'] ?? []) as $reference) {
+            $value = $this->normalizeKey((string) $reference);
+            if ($value !== '') {
+                $candidates[$value] = true;
+            }
+        }
+
+        foreach ($threadLinks as $link) {
+            if (isset($candidates[$this->normalizeKey((string) $link)])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $messages
+     * @return array<int, array<string, mixed>>
+     */
+    private function findSubjectParticipantContinuityMatches(array $messages, array $message): array
+    {
+        $subjectKey = $this->normalizeSubjectKey((string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? '')));
+        if ($subjectKey === '') {
+            return [];
+        }
+
+        $participants = $this->extractParticipantAddresses([
+            'from' => (string) ($message['from'] ?? ''),
+            'to' => (string) ($message['to'] ?? ''),
+        ]);
+        if (!count($participants)) {
+            return [];
+        }
+
+        return array_values(array_filter($messages, function (array $record) use ($subjectKey, $participants): bool {
+            return $this->recordMatchesSubjectParticipantFallback($record, $subjectKey, $participants);
+        }));
+    }
+
+    private function recordMatchesSubjectParticipantFallback(array $record, string $subjectKey, array $participants): bool
+    {
+        $recordSubjectKey = $this->normalizeSubjectKey((string) (($record['subject_normalized'] ?? null) ?: ($record['subject'] ?? '')));
+        if ($recordSubjectKey === '') {
+            $recordThreadKey = $this->normalizeKey((string) ($record['thread_key'] ?? ''));
+            if (strpos($recordThreadKey, 'subject:') === 0) {
+                $recordSubjectKey = substr($recordThreadKey, 8);
+            }
+        }
+
+        if ($recordSubjectKey === '' || $recordSubjectKey !== $subjectKey) {
+            return false;
+        }
+
+        $recordParticipants = $this->extractParticipantAddresses($record);
+        if (!count($recordParticipants)) {
+            return false;
+        }
+
+        $sharedParticipants = array_values(array_intersect($participants, $recordParticipants));
+
+        return count($sharedParticipants) >= min(2, count($participants), count($recordParticipants));
+    }
+
+    private function normalizeSubjectKey(string $subject): string
+    {
+        $normalized = MimeDecoder::normalizeReplySubject($subject);
+
+        return $this->normalizeKey($normalized);
+    }
+
+    private function extractParticipantAddresses(array $record): array
+    {
+        $addresses = [];
+        foreach (['from', 'to'] as $field) {
+            foreach ($this->extractEmails((string) ($record[$field] ?? '')) as $email) {
+                $addresses[$email] = true;
+            }
+        }
+
+        return array_keys($addresses);
+    }
+
+    private function extractEmails(string $value): array
+    {
+        $value = str_replace(["\r", "\n", ';'], [',', ',', ','], $value);
+        $emails = [];
+
+        if (preg_match_all('/[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,63}/i', $value, $matches) === 1 || !empty($matches[0])) {
+            foreach ((array) ($matches[0] ?? []) as $email) {
+                $normalized = strtolower(trim((string) $email));
+                if ($normalized !== '' && filter_var($normalized, FILTER_VALIDATE_EMAIL)) {
+                    $emails[$normalized] = true;
+                }
+            }
+        }
+
+        if (!count($emails)) {
+            $candidate = strtolower(trim($value, " \t\n\r\0\x0B<>\"'"));
+            if ($candidate !== '' && filter_var($candidate, FILTER_VALIDATE_EMAIL)) {
+                $emails[$candidate] = true;
+            }
+        }
+
+        return array_keys($emails);
+    }
+
+    private function extractSelectedRuleId(array $record): int
+    {
+        if (!is_array($record['selected_rule'] ?? null)) {
+            return 0;
+        }
+
+        return (int) ($record['selected_rule']['id'] ?? 0);
+    }
+
+    private function extractMatchedNoMatchRuleId(array $record): int
+    {
+        if (!is_array($record['generic_ai_decision'] ?? null)) {
+            return 0;
+        }
+
+        return (int) ($record['generic_ai_decision']['matched_no_match_rule_id'] ?? 0);
     }
 
     private function resolveThreadKeyFromMessage(array $message): string

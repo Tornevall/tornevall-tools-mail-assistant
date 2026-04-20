@@ -2,7 +2,7 @@
 
 Project-local guide for `projects/tornevall-tools-mail-assistant`.
 
-Last synchronized: 2026-04-19
+Last synchronized: 2026-04-20
 
 ## Purpose
 
@@ -38,6 +38,10 @@ It is expected to:
 - `tests/rule-context-priority-regression.php` - verifies contextual subject matches outrank generic sender matches when explicit priority is tied
 - `tests/ai-instruction-compliance-regression.php` - verifies obviously contradictory AI replies are rejected against strict redirect/no-responsibility instructions
 - `tests/body-only-no-summary-regression.php` - verifies `write only the email body` instructions suppress the appended request-summary block
+- `tests/reply-chain-rule-reuse-regression.php` - verifies a follow-up reply can reuse the earlier matched rule from local thread-linked history
+- `tests/reply-chain-generic-no-match-reuse-regression.php` - verifies a follow-up reply can prioritize the earlier unmatched fallback row from the same reply chain
+- `tests/reply-chain-subject-fallback-regression.php` - verifies older/malformed follow-ups can still reuse the earlier selected rule through normalized subject + same participants when reply headers are missing
+- `tests/reply-chain-reply-message-id-regression.php` - verifies handled replies persist a generated outgoing `reply_message_id` and that later follow-ups can reuse the earlier rule through that stored sent-message id
 
 ## Current operator behavior
 
@@ -57,6 +61,8 @@ It is expected to:
 - Reply chains are now first-class runtime input: subjects are matched without `Re:`/`Fwd:`/`Sv:` prefixes, quoted
   historical blocks are stripped before body matching/AI summaries, and outgoing replies preserve `In-Reply-To` /
   `References` headers.
+- Reply-chain continuity is now also rule-aware: when `In-Reply-To` / `References` link a new unread message to an earlier handled conversation, the runner may reuse the earlier matched rule or prioritize the earlier unmatched fallback row before it gives up as no-match.
+- Reply continuity now also has two extra safety nets: locally sent replies generate/store an explicit outgoing `reply_message_id`, and older/malformed follow-ups without usable reply headers may still recover continuity through normalized subject + same participants (`from` / `to`).
 - Outgoing replies are now composed as `multipart/alternative`: keep the plain-text reply body, but also derive a
   styled HTML body so ordinary mail clients see a formatted support reply instead of raw plain text.
 - No-match skips should be logged explicitly with mailbox/from/to/subject metadata so operators can diagnose `scanned` +
@@ -106,6 +112,7 @@ It is expected to:
   while still saving the persistent log file.
 - Run summaries should include per-message `message_results[]` diagnostics, not only aggregate counters.
 - No-match diagnostics should retain an `evaluated_no_match_rules[]` trace so operators can see which unmatched rows were actually tried and why each one rejected/failed.
+- The local message-state file is still not allowed to suppress unread reprocessing, but it may now be used as a continuity hint to recover the prior selected rule / prior matched unmatched-row for reply-chain follow-ups.
 - If reply transport succeeds but IMAP post-handle finalize (`markSeen`, move, delete) fails, the run should surface an
   explicit warning reason such as `rule_matched_replied_imap_finalize_failed` instead of silently pretending the whole
   mailbox mutation finished.

@@ -125,7 +125,8 @@ php run --dry-run --include-history
 
 - includes `message_state` and per-mailbox `message_state_records[]` in the run summary
 - persists the current pass into `storage/state/message-state.json`
-- exposes prior local history matches as diagnostics only
+- exposes prior local history matches as diagnostics
+- makes it easier to inspect why a reply-chain follow-up reused an earlier matched rule or earlier unmatched fallback row
 - does **not** block unread IMAP mail from being processed
 
 ## Mini web UI
@@ -182,6 +183,9 @@ Rules can decide per message whether AI is enabled.
 - When static footer mode is used, trailing AI-generated signoff blocks are now stripped repeatedly before footer append so replies do not end up with duplicated closings such as both `Best regards` and `Regards`.
 - Message bodies are now sanitized more aggressively before they are sent as AI request summary context: HTML/MIME noise, SpamAssassin wrapper text, forwarded `.eml` header dumps, and malformed embedded header blocks are stripped first so the actual original request survives.
 - Reply-aware message parsing now strips common quoted history blocks before rule matching and AI summary generation, so follow-up emails in an existing thread can still match the intended support rule.
+- Local message-state is now also used as a thread continuity hint: when `In-Reply-To` / `References` link a follow-up to a previously handled conversation, the runner can reuse the earlier matched rule even if the newest mail itself no longer matches the original subject/body criteria.
+- The standalone runner now also generates and stores an explicit outgoing `Message-ID` for replies it sends itself, which makes later Gmail/Outlook follow-ups far more likely to link back to the locally tracked conversation instead of only referencing the assistant's last sent mail.
+- If an older or malformed follow-up mail arrives without usable `In-Reply-To` / `References`, the runner can now still recover continuity through normalized subject + same participants (`from` / `to`) before it gives up as no-match.
 - The token owner still needs approved `provider_openai` access in Tools unless that user is admin.
 - Outgoing replies are now sent as `multipart/alternative`: a plain-text part is kept for compatibility, while the visible mail is also rendered as a small styled HTML card for more polished support replies.
 - Outgoing assistant replies are now stamped with `X-Tornevall-Mail-Assistant: sent` so follow-up polling can identify assistant-originated mail and avoid self-reply loops.
@@ -208,6 +212,7 @@ Rules can decide per message whether AI is enabled.
 - If there are no valid active unmatched rows (non-empty `if` + `instruction`), the fallback is treated as unconfigured and no unmatched-mail AI reply is sent.
 - Rows are evaluated in `sort_order` order and may fall through to later rows when an earlier row is rejected.
 - That same fall-through now also applies when one unmatched row hits a row-local AI/API evaluation error; the runner logs the failed row and still tries later active rows before giving up.
+- If a reply-chain follow-up is linked to an earlier handled unmatched conversation, the runner now prioritizes the previously used unmatched row first before checking the rest of the active rows, which helps repository/API follow-ups stay on the same support path.
 - The AI is told to ignore outer SpamAssassin wrapper prose when it only forwards the original email, while still using SpamAssassin score/tests as safety hints.
 - Mailbox-level unmatched-mail fallback can now also carry its own `generic_no_match_ai_reasoning_effort` override from Tools config; Tools still decides per selected model whether reasoning is actually forwarded.
 - The config payload from Tools can now also include additive `user.ai_daily_budget` metadata so operators can inspect the effective AI token cap/remaining budget that Mail Support Assistant shares with the SocialGPT reply endpoint.
@@ -223,6 +228,8 @@ Rules can decide per message whether AI is enabled.
 - `mark_seen_on_skip` now only applies to deliberate heuristic skips such as high-score SpamAssassin junk, not to configuration-driven no-match cases.
 - Cron/manual execution only polls unread mail. Already-read mail is skipped immediately.
 - Unread mail may be reprocessed on later runs even if the same `Message-Id` already exists in local history; the local state file is diagnostic only and never blocks unread IMAP mail.
+- That same local state can now still assist linked follow-up replies by reusing the earlier matched rule or prioritizing the earlier unmatched row when `In-Reply-To` / `References` clearly point to the same conversation.
+- When explicit reply headers are missing or damaged, the same local state can now also fall back to normalized subject + same participants so older support threads still have a chance to continue on the earlier rule path.
 - Matchers currently support `from`, `to`, `subject`, and optional body text contains checks.
 - Subject matching is now reply-aware (`Re:`, `Fwd:`, `Sv:` prefixes are stripped before rule checks), and outgoing replies now preserve `In-Reply-To` / `References` headers so answers stay in the same thread.
 - Unmatched mail is now also logged more explicitly with mailbox/from/to/subject details, which makes `scanned` + `skipped` runs easier to diagnose.

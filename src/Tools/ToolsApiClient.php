@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-    private const CLIENT_VERSION = '0.3.25';
+    private const CLIENT_VERSION = '0.3.27';
 
     private string $baseUrl;
     private string $token;
@@ -610,6 +610,14 @@ class ToolsApiClient
                 'to=' . trim((string) ($entry['to'] ?? '')),
                 'subject=' . trim((string) ($entry['subject'] ?? '')),
             ];
+
+            if (is_array($entry['selected_rule'] ?? null) && (int) ($entry['selected_rule']['id'] ?? 0) > 0) {
+                $lineParts[] = 'selected_rule=' . (int) ($entry['selected_rule']['id'] ?? 0) . ':' . trim((string) ($entry['selected_rule']['name'] ?? ''));
+            }
+
+            if (is_array($entry['generic_ai_decision'] ?? null) && (int) ($entry['generic_ai_decision']['matched_no_match_rule_id'] ?? 0) > 0) {
+                $lineParts[] = 'matched_no_match_rule=' . (int) ($entry['generic_ai_decision']['matched_no_match_rule_id'] ?? 0);
+            }
 
             $bodyExcerpt = trim((string) ($entry['body_excerpt'] ?? ''));
             if ($bodyExcerpt !== '') {

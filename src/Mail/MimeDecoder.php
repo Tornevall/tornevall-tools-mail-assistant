@@ -74,7 +74,8 @@ class MimeDecoder
 
         $lines = preg_split('/\n/', $body) ?: [];
         $kept = [];
-        foreach ($lines as $line) {
+        $hasMeaningfulBodyContent = false;
+        foreach ($lines as $index => $line) {
             $trimmed = trim((string) $line);
             if ($trimmed !== '') {
                 if (preg_match('/^>/u', $trimmed) === 1) {
@@ -83,11 +84,15 @@ class MimeDecoder
                 if (preg_match('/^On .+wrote:$/iu', $trimmed) === 1) {
                     break;
                 }
-                if (preg_match('/^(From|Sent|To|Subject|Date):/iu', $trimmed) === 1 && count($kept) > 0) {
+                if (self::startsQuotedHeaderBlock($lines, (int) $index, $hasMeaningfulBodyContent)) {
                     break;
                 }
                 if (preg_match('/^[-_]{2,}\s*Original Message\s*[-_]{2,}$/iu', $trimmed) === 1) {
                     break;
+                }
+
+                if (!self::isStructuredBodyHeaderLine($trimmed)) {
+                    $hasMeaningfulBodyContent = true;
                 }
             }
 
@@ -468,6 +473,61 @@ class MimeDecoder
         }
 
         return self::normalizeText($text);
+    }
+
+    /**
+     * @param array<int, string> $lines
+     */
+    private static function startsQuotedHeaderBlock(array $lines, int $index, bool $hasMeaningfulBodyContent): bool
+    {
+        if (!$hasMeaningfulBodyContent) {
+            return false;
+        }
+
+        $current = trim((string) ($lines[$index] ?? ''));
+        if (!self::isStructuredBodyHeaderLine($current)) {
+            return false;
+        }
+
+        $headerish = 0;
+        $nonEmptyScanned = 0;
+        $lineCount = count($lines);
+        for ($probeIndex = $index; $probeIndex < $lineCount; $probeIndex++) {
+            $probe = trim((string) ($lines[$probeIndex] ?? ''));
+            if ($probe === '') {
+                if ($headerish > 0) {
+                    break;
+                }
+                continue;
+            }
+
+            $nonEmptyScanned++;
+            if (self::isStructuredBodyHeaderLine($probe)) {
+                $headerish++;
+            } else {
+                break;
+            }
+
+            if ($headerish >= 2) {
+                return true;
+            }
+
+            if ($nonEmptyScanned >= 3) {
+                break;
+            }
+        }
+
+        return false;
+    }
+
+    private static function isStructuredBodyHeaderLine(string $line): bool
+    {
+        $line = trim($line);
+        if ($line === '') {
+            return false;
+        }
+
+        return preg_match('/^(?:from|sent|to|cc|bcc|subject|date|reply-to|message-id|sender(?:\s+ip)?|message\s+body|body|return-path|delivered-to|received|mime-version|content-type|content-transfer-encoding|ämne|amne|mne|från|fran|frn|datum|till|kopia|svar\s+till|meddelande-id):/iu', $line) === 1;
     }
 
     /**

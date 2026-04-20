@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.31 - 2026-04-20
+
+- Clear-text contact-form style inbound mails that begin with structured lines such as `From:`, `Subject:`, `Sender IP:`, and `Message Body:` no longer get truncated to only the first header-like line during reply-aware parsing.
+- The standalone request-summary pipeline now keeps the actual problem description (for example the real delisting/Cloudflare complaint text) plus useful context such as sender IP when those fields are present in the body itself.
+- Outgoing appended **Summary of your request** blocks, local body excerpts, and AI request context now therefore preserve those clearer clear-text problem details instead of collapsing to only a sender line.
+- Added regression coverage in `tests/contact-form-summary-regression.php` while keeping the existing malformed-wrapper and body-only summary regressions green.
+
 ## 0.3.30 - 2026-04-20
 
 - Added explicit release discipline for the standalone assistant: every assistant change should now end in an immediate commit, an updated changelog entry, and its own incremental semantic tag.

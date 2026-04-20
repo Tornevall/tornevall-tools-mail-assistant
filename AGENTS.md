@@ -37,6 +37,7 @@ It is expected to:
 - `tests/reply-disabled-unread-regression.php` - verifies matched rules with `reply.enabled=false` stay unread by default
 - `tests/ai-instruction-compliance-regression.php` - verifies obviously contradictory AI replies are rejected against strict redirect/no-responsibility instructions
 - `tests/body-only-no-summary-regression.php` - verifies `write only the email body` instructions suppress the appended request-summary block
+- `tests/contact-form-summary-regression.php` - verifies clear-text contact-form mails with `From:` / `Subject:` / `Sender IP:` / `Message Body:` lines still preserve the real issue text in summaries and appended reply excerpts
 - `tests/reply-chain-rule-reuse-regression.php` - verifies a follow-up reply can reuse the earlier matched rule from local thread-linked history
 - `tests/reply-chain-generic-no-match-reuse-regression.php` - verifies a follow-up reply can prioritize the earlier unmatched fallback row from the same reply chain
 - `tests/reply-chain-subject-fallback-regression.php` - verifies older/malformed follow-ups can still reuse the earlier selected rule through normalized subject + same participants when reply headers are missing
@@ -70,6 +71,7 @@ It is expected to:
 - Reply chains are now first-class runtime input: subjects are matched without `Re:`/`Fwd:`/`Sv:` prefixes, quoted
   historical blocks are stripped before body matching/AI summaries, and outgoing replies preserve `In-Reply-To` /
   `References` headers.
+- Reply-aware parsing must not treat contact-form style body lines (`From:` / `Subject:` / `Sender IP:` / `Message Body:` inside the plain-text body itself) as automatic quoted-history cutoffs; those lines may be the only path to the actual problem description and sender IP.
 - Reply-chain continuity is now also rule-aware: when `In-Reply-To` / `References` link a new unread message to an earlier handled conversation, the runner may reuse the earlier matched rule or prioritize the earlier unmatched fallback row before it gives up as no-match.
 - Reply continuity now also has two extra safety nets: locally sent replies generate/store an explicit outgoing `reply_message_id`, and older/malformed follow-ups without usable reply headers may still recover continuity through normalized subject + same participants (`from` / `to`).
 - When a reply chain is explicitly linked to a previously approved unmatched thread, the runner may now continue that same unmatched row directly instead of re-running the initial allow-condition classifier for the same conversation.

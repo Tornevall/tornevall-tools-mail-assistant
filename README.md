@@ -166,6 +166,12 @@ Use GitHub tickets for bugs, feature requests, setup clarifications, and standal
 
 - <https://github.com/Tornevall/tornevall-tools-mail-assistant>
 
+## Release / parity discipline
+
+- Every change to the standalone Mail Support Assistant should end in an immediate git commit in this repository.
+- Every incremental standalone version should also get its own pushed semantic tag (`0.x.y`) so the changelog, repository history, and deployed/operator-visible behavior stay aligned.
+- When shared mail-client/operator behavior changes (for example inbox-card UX, thread continuity diagnostics, manual handling flows, or reply-transport behavior), keep the standalone dashboard and any future Tools-admin mail-client surface synchronized in the same change instead of letting one UI drift.
+
 ## AI behavior
 
 Rules can decide per message whether AI is enabled.

@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.30 - 2026-04-20
+
+- Added explicit release discipline for the standalone assistant: every assistant change should now end in an immediate commit, an updated changelog entry, and its own incremental semantic tag.
+- Added a parity rule for any future Tools-admin mail-client/operator surface so shared mail-client behavior must be updated in both UIs together.
+- Retired the older `tests/rule-context-priority-regression.php` private-method regression because the newer overlap-selection coverage now exercises the same rule-priority outcome through richer runner-level diagnostics instead of a brittle internal score assertion.
+
 ## 0.3.29 - 2026-04-20
 
 - The standalone dashboard now renders a more human-readable, mail-client-style operator view instead of only dumping raw JSON blocks for last-run, history, and config.

@@ -35,7 +35,6 @@ It is expected to:
 - `tests/bcc-routing-regression.php` - verifies normalized `to` / `cc` / `bcc` relay recipient forwarding
 - `tests/default-bcc-env-regression.php` - verifies `.env` fallback BCC behavior when config BCC values are empty
 - `tests/reply-disabled-unread-regression.php` - verifies matched rules with `reply.enabled=false` stay unread by default
-- `tests/rule-context-priority-regression.php` - verifies contextual subject matches outrank generic sender matches when explicit priority is tied
 - `tests/ai-instruction-compliance-regression.php` - verifies obviously contradictory AI replies are rejected against strict redirect/no-responsibility instructions
 - `tests/body-only-no-summary-regression.php` - verifies `write only the email body` instructions suppress the appended request-summary block
 - `tests/reply-chain-rule-reuse-regression.php` - verifies a follow-up reply can reuse the earlier matched rule from local thread-linked history
@@ -43,6 +42,14 @@ It is expected to:
 - `tests/reply-chain-subject-fallback-regression.php` - verifies older/malformed follow-ups can still reuse the earlier selected rule through normalized subject + same participants when reply headers are missing
 - `tests/reply-chain-reply-message-id-regression.php` - verifies handled replies persist a generated outgoing `reply_message_id` and that later follow-ups can reuse the earlier rule through that stored sent-message id
 - `tests/reply-chain-generic-no-match-bypass-regression.php` - verifies explicitly linked follow-ups in an already approved unmatched thread can continue directly on the previously used unmatched row without re-running the initial allow-condition triage
+
+## Release and parity discipline
+
+- **Every assistant change must be committed immediately in this repo.** Do not leave Mail Support Assistant feature/code/doc/test changes uncommitted between sessions.
+- **Every incremental assistant version must be tagged and pushed.** Use the next semantic standalone tag (`0.x.y`) for each committed assistant increment, and backfill missing tags when older changelog versions were never tagged.
+- `CHANGELOG.md` must always be updated before creating that incremental version tag, and `README.md` must be kept in sync when operator behavior, setup, or workflows change.
+- If a future Tools-hosted mail-client/operator surface is added under Tools admin, any shared mail-client behavior change (message cards, diagnostics, thread continuity, manual handling flow, reply transport behavior, etc.) must update **both** the standalone UI and the Tools-admin UI in the same change.
+- Treat the standalone dashboard (`templates/dashboard.php`, `src/Web/WebApp.php`) and any future Tools-admin mail-client surface as one shared operator contract; keep both AGENTS files synchronized when that contract changes.
 
 ## Current operator behavior
 

@@ -392,10 +392,14 @@ class MailAssistantRunner
                                 'mailbox' => $mailbox['name'] ?? null,
                                 'uid' => $message['uid'] ?? null,
                                 'message_id' => $message['message_id'] ?? null,
+                                'thread_key' => $this->resolveThreadKey($message),
+                                'in_reply_to' => $message['in_reply_to'] ?? null,
+                                'references' => array_values((array) ($message['references'] ?? [])),
                                 'subject' => $message['subject'] ?? null,
                                 'subject_normalized' => $message['subject_normalized'] ?? null,
                                 'from' => $message['from'] ?? null,
                                 'to' => $message['to'] ?? null,
+                                'thread_context_messages' => count((array) (($message['thread_context']['messages'] ?? null) ?: [])),
                                 'rule_resolution_source' => $genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match'),
                                 'reused_from_message_id' => $genericNoMatch['reused_from_message_id'] ?? (($threadReuse['record']['message_id'] ?? null) ?: null),
                                 'generic_no_match_reason' => $genericNoMatch['reason'] ?? null,
@@ -679,12 +683,21 @@ class MailAssistantRunner
 
         $noMatchRuleId = (int) (($record['generic_ai_decision']['matched_no_match_rule_id'] ?? 0));
         if ($noMatchRuleId > 0) {
+            $preferredNoMatchRule = null;
+            foreach ($this->resolveGenericNoMatchRules($mailbox) as $row) {
+                if ((int) ($row['id'] ?? 0) === $noMatchRuleId) {
+                    $preferredNoMatchRule = $row;
+                    break;
+                }
+            }
+
             return [
                 'type' => 'generic_no_match_rule',
                 'source' => $this->buildHistoricalRuleReuseSource('generic_no_match_rule', $matchMode),
                 'record' => $record,
                 'preferred_no_match_rule_id' => $noMatchRuleId,
                 'preferred_no_match_rule_order' => (int) (($record['generic_ai_decision']['matched_no_match_rule_order'] ?? 0)),
+                'preferred_no_match_rule' => $preferredNoMatchRule,
             ];
         }
 
@@ -846,6 +859,27 @@ class MailAssistantRunner
                 'reused_from_message_id' => (string) (($threadReuse['record']['message_id'] ?? null) ?: ''),
                 'reused_from_reason' => (string) (($threadReuse['record']['reason'] ?? null) ?: ''),
             ];
+        }
+
+        if ($this->shouldBypassGenericNoMatchAllowCheck($threadReuse)) {
+            $preferredRule = is_array($threadReuse['preferred_no_match_rule'] ?? null)
+                ? (array) $threadReuse['preferred_no_match_rule']
+                : null;
+
+            if (is_array($preferredRule)) {
+                $directContinuation = $this->tryContinueKnownGenericNoMatchThread(
+                    $imap,
+                    $mailbox,
+                    $message,
+                    $preferredRule,
+                    $defaults,
+                    $dryRun,
+                    $threadReuse
+                );
+                if (is_array($directContinuation)) {
+                    return $directContinuation;
+                }
+            }
         }
 
         $lastDecision = [];
@@ -1034,6 +1068,117 @@ class MailAssistantRunner
         ]);
 
         return array_merge($preferred, $others);
+    }
+
+    private function shouldBypassGenericNoMatchAllowCheck(?array $threadReuse): bool
+    {
+        if (!is_array($threadReuse)) {
+            return false;
+        }
+
+        if ((string) ($threadReuse['type'] ?? '') !== 'generic_no_match_rule') {
+            return false;
+        }
+
+        return strtolower(trim((string) (($threadReuse['record']['thread_match_mode'] ?? null) ?: ''))) === 'explicit_links';
+    }
+
+    private function tryContinueKnownGenericNoMatchThread(
+        ImapMailboxClient $imap,
+        array $mailbox,
+        array $message,
+        array $noMatchRule,
+        array $defaults,
+        bool $dryRun,
+        array $threadReuse
+    ): ?array {
+        try {
+            $aiResult = $this->tools->generateGenericNoMatchThreadContinuationReply($mailbox, $message, [
+                'if_condition' => (string) ($noMatchRule['if_condition'] ?? ''),
+                'reply_instruction' => (string) ($noMatchRule['instruction'] ?? ''),
+                'ai_model' => (string) ($noMatchRule['ai_model'] ?? (($defaults['generic_no_match_ai_model'] ?? null) ?: '')),
+                'ai_fallback_model' => (string) (($defaults['generic_no_match_ai_fallback_model'] ?? null) ?: ''),
+                'ai_reasoning_effort' => (string) ($noMatchRule['ai_reasoning_effort'] ?? (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: '')),
+            ]);
+        } catch (Throwable $e) {
+            $this->logger->warning('Known reply-chain generic no-match row could not be continued directly; falling back to normal unmatched-row evaluation.', [
+                'mailbox' => $mailbox['name'] ?? null,
+                'uid' => $message['uid'] ?? null,
+                'message_id' => $message['message_id'] ?? null,
+                'reused_from_message_id' => $threadReuse['record']['message_id'] ?? null,
+                'preferred_no_match_rule_id' => $noMatchRule['id'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+
+        $replyText = trim((string) ($aiResult['response'] ?? ''));
+        if (!$this->isGenericAiReplyUsable($replyText)) {
+            $this->logger->warning('Known reply-chain generic no-match row returned no usable continuation reply; falling back to normal unmatched-row evaluation.', [
+                'mailbox' => $mailbox['name'] ?? null,
+                'uid' => $message['uid'] ?? null,
+                'message_id' => $message['message_id'] ?? null,
+                'reused_from_message_id' => $threadReuse['record']['message_id'] ?? null,
+                'preferred_no_match_rule_id' => $noMatchRule['id'] ?? null,
+                'model' => $aiResult['model'] ?? null,
+            ]);
+
+            return null;
+        }
+
+        $replyText = $this->applyGenericFallbackFooter($mailbox, $replyText, (string) ($noMatchRule['footer'] ?? ''));
+        $subjectPrefix = trim((string) (($defaults['generic_no_match_subject_prefix'] ?? null) ?: 'Re:'));
+        $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
+        $syntheticRule = [
+            'reply' => [
+                'from_name' => (string) (($defaults['from_name'] ?? null) ?: ''),
+                'from_email' => (string) (($defaults['from_email'] ?? null) ?: ''),
+                'bcc' => (string) (($defaults['bcc'] ?? null) ?: ''),
+            ],
+        ];
+
+        $replyDelivery = $this->sendReply($mailbox, $syntheticRule, $message, $subject, $replyText, $dryRun);
+        $finalizeResult = $this->finalizeHandledMessage($imap, $message, $dryRun);
+        $decision = [
+            'can_reply' => true,
+            'certainty' => 'high',
+            'reason' => 'Continuing an already approved reply chain through the previously used unmatched support row.',
+            'risk_flags' => ['known_reply_chain_reuse'],
+            'decision_reason_code' => 'thread_history_generic_no_match_reused',
+            'raw_response' => (string) ($aiResult['response'] ?? ''),
+            'matched_no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
+            'matched_no_match_rule_order' => (int) ($noMatchRule['sort_order'] ?? 0),
+            'bypassed_allow_check' => true,
+        ];
+        $evaluatedRules = [$this->buildGenericNoMatchRuleDecisionSummary($noMatchRule, $decision)];
+
+        $this->logger->info('Known reply-chain generic no-match row reused directly without re-running the initial allow-condition classifier.', [
+            'mailbox' => $mailbox['name'] ?? null,
+            'uid' => $message['uid'] ?? null,
+            'message_id' => $message['message_id'] ?? null,
+            'reused_from_message_id' => $threadReuse['record']['message_id'] ?? null,
+            'matched_no_match_rule_id' => $noMatchRule['id'] ?? null,
+            'matched_no_match_rule_order' => $noMatchRule['sort_order'] ?? null,
+            'post_handle_action' => $finalizeResult['post_handle_action'] ?? null,
+            'post_handle_warning' => $finalizeResult['post_handle_warning'] ?? null,
+        ]);
+
+        return [
+            'handled' => true,
+            'reason' => !empty($finalizeResult['post_handle_warning'])
+                ? 'no_matching_rule_generic_ai_replied_imap_finalize_failed'
+                : 'no_matching_rule_generic_ai_replied',
+            'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
+            'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
+            'ai_decision' => $this->attachGenericNoMatchEvaluationTrace($decision, $evaluatedRules),
+            'reply_excerpt' => $this->buildStateExcerpt($replyText, 500),
+            'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
+            'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
+            'rule_resolution_source' => (string) (($threadReuse['source'] ?? null) ?: 'generic_no_match'),
+            'reused_from_message_id' => (string) (($threadReuse['record']['message_id'] ?? null) ?: ''),
+            'reused_from_reason' => (string) (($threadReuse['record']['reason'] ?? null) ?: ''),
+        ];
     }
 
     private function buildGenericNoMatchRuleDecisionSummary(array $noMatchRule, array $decision): array
@@ -1735,9 +1880,15 @@ class MailAssistantRunner
             'uid' => (int) ($message['uid'] ?? 0),
             'message_id' => (string) ($message['message_id'] ?? ''),
             'message_key' => $this->resolveMessageKey($message),
+            'thread_key' => $this->resolveThreadKey($message),
+            'in_reply_to' => (string) (($message['in_reply_to'] ?? null) ?: ''),
+            'references' => array_values((array) ($message['references'] ?? [])),
             'subject' => (string) ($message['subject'] ?? ''),
+            'subject_normalized' => (string) (($message['subject_normalized'] ?? null) ?: ''),
             'from' => (string) ($message['from'] ?? ''),
             'to' => (string) ($message['to'] ?? ''),
+            'date' => (string) ($message['date'] ?? ''),
+            'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
             'outcome' => $outcome,
             'reason' => $reason,
         ];

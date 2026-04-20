@@ -1,11 +1,21 @@
 # CHANGELOG
 
+## 0.3.29 - 2026-04-20
+
+- The standalone dashboard now renders a more human-readable, mail-client-style operator view instead of only dumping raw JSON blocks for last-run, history, and config.
+- Latest-run mailbox activity is now shown as expandable message cards with subject/from/to/date, body preview, selected-rule/no-match diagnostics, thread metadata, and optional saved local header maps when a cached message copy exists.
+- The dashboard now also summarizes Tools mailbox/rule configuration more readably while still keeping raw JSON available in collapsible advanced sections.
+- Per-message run diagnostics now include date/body excerpt, which helps the dashboard behave more like an inbox preview surface without needing live IMAP administration yet.
+- Dashboard AJAX toolbar actions now reuse the readable operator panels cleanly without throwing on a removed raw last-run element reference after refresh/self-test/dry-run responses.
+
 ## 0.3.28 - 2026-04-20
 
 - Reply continuity is now more tolerant of older/malformed follow-ups: if `In-Reply-To` / `References` are missing or unusable, the standalone runner can fall back to normalized subject + same participants (`from` / `to`) before it gives up as no-match.
 - Standalone replies now generate and persist an explicit outgoing `reply_message_id`, so later follow-ups that reference the assistant's own sent mail can be linked back to the earlier handled conversation more reliably.
 - Local thread-history matching now normalizes Message-Id-style values more strictly (including angle-bracket stripping), which makes stored continuity hints behave more like real mail headers.
-- Added regression coverage in `tests/reply-chain-subject-fallback-regression.php` and `tests/reply-chain-reply-message-id-regression.php`.
+- Explicitly linked follow-ups in a previously approved unmatched thread can now skip the first allow-condition triage and continue directly on that same previously used unmatched row instead of re-asking the classifier from scratch.
+- Per-message run diagnostics now also expose `thread_key`, `in_reply_to`, and `references[]` for easier reply-chain debugging.
+- Added regression coverage in `tests/reply-chain-subject-fallback-regression.php`, `tests/reply-chain-reply-message-id-regression.php`, and `tests/reply-chain-generic-no-match-bypass-regression.php`.
 
 ## 0.3.27 - 2026-04-20
 

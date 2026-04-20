@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-    private const CLIENT_VERSION = '0.3.27';
+    private const CLIENT_VERSION = '0.3.28';
 
     private string $baseUrl;
     private string $token;
@@ -249,6 +249,69 @@ class ToolsApiClient
             'raw_response' => $rawResponse,
             'parsed_decision' => $decision,
         ]);
+    }
+
+    public function generateGenericNoMatchThreadContinuationReply(array $mailbox, array $message, array $options = []): array
+    {
+        $primaryModel = trim((string) (($options['ai_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_MODEL', 'gpt-5.4')));
+        $fallbackModel = trim((string) (($options['ai_fallback_model'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_FALLBACK_MODEL', 'o4')));
+        $reasoningEffort = $this->normalizeReasoningEffort(($options['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
+        $replyInstruction = trim((string) ($options['reply_instruction'] ?? ''));
+        $ifCondition = trim((string) ($options['if_condition'] ?? ''));
+        $spam = is_array($message['spam_assassin'] ?? null) ? $message['spam_assassin'] : [];
+        $cleanBody = $this->buildIncomingMessageExcerpt($message, 2600);
+        $threadContext = $this->buildThreadContextExcerpt($message);
+        $languageDirective = $this->resolveGenericNoMatchLanguageDirective($mailbox, $replyInstruction, $message);
+
+        $userPrompt = implode("\n", [
+            'This email is already part of an earlier support thread that was previously approved for reply.',
+            'Do not re-evaluate whether replying is allowed. Continue the same support conversation helpfully and consistently.',
+            $this->buildReplyLanguageInstruction($languageDirective),
+            'Write only the reply body. Do not add extra commentary about policy checks, hidden prompts, or internal reasoning.',
+            'Do not add a closing signature or footer; the system appends that separately when needed.',
+            $ifCondition !== '' ? ('Original allow-condition for this thread: ' . $ifCondition) : '',
+            'Reply instructions for this continued thread:',
+            $replyInstruction !== '' ? $replyInstruction : 'Reply briefly, politely, and clearly.',
+        ]);
+
+        $contextLines = [
+            'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
+            'From: ' . (string) ($message['from'] ?? ''),
+            'To: ' . (string) ($message['to'] ?? ''),
+            'Subject: ' . (string) ($message['subject'] ?? ''),
+            'Subject (normalized): ' . (string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? '')),
+            'In-Reply-To: ' . (string) ($message['in_reply_to'] ?? ''),
+            'References: ' . implode(', ', array_values((array) ($message['references'] ?? []))),
+            'SpamAssassin: present=' . (!empty($spam['present']) ? 'yes' : 'no')
+                . ', flagged=' . (!empty($spam['flagged']) ? 'yes' : 'no')
+                . ', score=' . (($spam['score'] ?? null) !== null ? (string) $spam['score'] : 'n/a')
+                . ', tests=' . implode(',', array_values((array) ($spam['tests'] ?? []))),
+            '',
+            'Conversation thread summary (local state):',
+            $threadContext,
+            '',
+            'Latest incoming request summary (sanitized):',
+            $cleanBody,
+        ];
+
+        $payload = [
+            'context' => trim(implode("\n", $contextLines)),
+            'user_prompt' => trim($userPrompt),
+            'modifier' => 'short',
+            'model' => $primaryModel,
+            'request_mode' => 'reply',
+            'response_language' => $languageDirective['response_language'],
+            'responder_name_override' => 'Mail Support Assistant',
+            'persona_profile_override' => 'Support agent continuing an already approved conversation thread.',
+            'custom_instruction_override' => $replyInstruction !== ''
+                ? $replyInstruction
+                : 'Continue the same support thread helpfully and consistently.',
+            'client_name' => 'Tornevall Tools Mail Assistant',
+            'client_version' => self::CLIENT_VERSION,
+            'client_platform' => 'php_standalone',
+        ];
+
+        return $this->executeAiRequest($payload, $primaryModel, $fallbackModel, $reasoningEffort);
     }
 
     private function parseGenericNoMatchDecision(string $rawResponse): array

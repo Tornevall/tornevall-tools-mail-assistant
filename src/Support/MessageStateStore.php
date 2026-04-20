@@ -289,13 +289,19 @@ class MessageStateStore
         }));
 
         if (count($matchingRecords)) {
-            usort($matchingRecords, static function (array $a, array $b): int {
+            usort($matchingRecords, function (array $a, array $b) use ($threadLinks): int {
+                $scoreCompare = $this->recordThreadLinkScore($b, $threadLinks) <=> $this->recordThreadLinkScore($a, $threadLinks);
+                if ($scoreCompare !== 0) {
+                    return $scoreCompare;
+                }
+
                 return strcmp((string) ($b['recorded_at'] ?? ''), (string) ($a['recorded_at'] ?? ''));
             });
 
             $record = $matchingRecords[0] ?? null;
             if (is_array($record)) {
                 $record['thread_match_mode'] = 'explicit_links';
+                $record['thread_link_score'] = $this->recordThreadLinkScore($record, $threadLinks);
             }
 
             return $record;
@@ -317,6 +323,7 @@ class MessageStateStore
         $record = $fallbackMatches[0] ?? null;
         if (is_array($record)) {
             $record['thread_match_mode'] = 'subject_participants';
+            $record['thread_link_score'] = 0;
         }
 
         return $record;
@@ -388,29 +395,52 @@ class MessageStateStore
 
     private function recordMatchesThreadLinks(array $record, array $threadLinks): bool
     {
+        return $this->recordThreadLinkScore($record, $threadLinks) > 0;
+    }
+
+    private function recordThreadLinkScore(array $record, array $threadLinks): int
+    {
         $candidates = [];
 
         foreach (['message_id', 'reply_message_id', 'thread_key', 'in_reply_to'] as $field) {
             $value = $this->normalizeKey((string) ($record[$field] ?? ''));
             if ($value !== '') {
-                $candidates[$value] = true;
+                $candidates[$field][$value] = true;
             }
         }
 
         foreach ((array) ($record['references'] ?? []) as $reference) {
             $value = $this->normalizeKey((string) $reference);
             if ($value !== '') {
-                $candidates[$value] = true;
+                $candidates['references'][$value] = true;
             }
         }
 
+        $score = 0;
         foreach ($threadLinks as $link) {
-            if (isset($candidates[$this->normalizeKey((string) $link)])) {
-                return true;
+            $normalized = $this->normalizeKey((string) $link);
+            if ($normalized === '') {
+                continue;
+            }
+
+            if (isset($candidates['reply_message_id'][$normalized])) {
+                $score = max($score, 60);
+            }
+            if (isset($candidates['message_id'][$normalized])) {
+                $score = max($score, 50);
+            }
+            if (isset($candidates['in_reply_to'][$normalized])) {
+                $score = max($score, 40);
+            }
+            if (isset($candidates['references'][$normalized])) {
+                $score = max($score, 30);
+            }
+            if (isset($candidates['thread_key'][$normalized])) {
+                $score = max($score, 20);
             }
         }
 
-        return false;
+        return $score;
     }
 
     /**

@@ -42,6 +42,7 @@ It is expected to:
 - `tests/reply-chain-generic-no-match-reuse-regression.php` - verifies a follow-up reply can prioritize the earlier unmatched fallback row from the same reply chain
 - `tests/reply-chain-subject-fallback-regression.php` - verifies older/malformed follow-ups can still reuse the earlier selected rule through normalized subject + same participants when reply headers are missing
 - `tests/reply-chain-reply-message-id-regression.php` - verifies handled replies persist a generated outgoing `reply_message_id` and that later follow-ups can reuse the earlier rule through that stored sent-message id
+- `tests/reply-chain-generic-no-match-bypass-regression.php` - verifies explicitly linked follow-ups in an already approved unmatched thread can continue directly on the previously used unmatched row without re-running the initial allow-condition triage
 
 ## Current operator behavior
 
@@ -49,6 +50,7 @@ It is expected to:
 - The web dashboard may trigger safe diagnostics/dry-runs through AJAX, but it should still reuse the same runner
   classes instead of inventing a second execution stack. In many deployments it does not need to be public at all
   because Tools already hosts the real config surface.
+- The standalone dashboard should now prefer a human-readable operator inbox over raw JSON dumps: mailbox/message cards, expandable diagnostics, optional local-header visibility from saved message copies, and lightweight continuity inspection. It is still **not** the place where the full mailbox/rule admin model should be duplicated; keep heavy admin/config in Tools.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is
   limited to `.env`, sessions, logs, last-run summaries, and optional message copies in `storage/`.
 - Handled or explicitly ignored mail may still be recorded locally by normalized `Message-Id`, but only when history
@@ -63,6 +65,7 @@ It is expected to:
   `References` headers.
 - Reply-chain continuity is now also rule-aware: when `In-Reply-To` / `References` link a new unread message to an earlier handled conversation, the runner may reuse the earlier matched rule or prioritize the earlier unmatched fallback row before it gives up as no-match.
 - Reply continuity now also has two extra safety nets: locally sent replies generate/store an explicit outgoing `reply_message_id`, and older/malformed follow-ups without usable reply headers may still recover continuity through normalized subject + same participants (`from` / `to`).
+- When a reply chain is explicitly linked to a previously approved unmatched thread, the runner may now continue that same unmatched row directly instead of re-running the initial allow-condition classifier for the same conversation.
 - Outgoing replies are now composed as `multipart/alternative`: keep the plain-text reply body, but also derive a
   styled HTML body so ordinary mail clients see a formatted support reply instead of raw plain text.
 - No-match skips should be logged explicitly with mailbox/from/to/subject metadata so operators can diagnose `scanned` +

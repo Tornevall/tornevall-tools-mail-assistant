@@ -74,19 +74,382 @@ class WebApp
             $configError = 'MAIL_ASSISTANT_TOOLS_TOKEN is not configured yet.';
         }
 
+        $lastRun = $this->logger->lastRun();
+        $messageState = $this->runner->messageStateSummary();
+        $logLines = $this->logger->tail(25);
+        $messageCopies = $this->loadRecentMessageCopies(30);
+
         return [
             'title' => (string) Env::get('MAIL_ASSISTANT_TITLE', 'Mail Support Assistant'),
             'toolsBaseUrl' => $this->tools->getBaseUrl(),
             'toolsAdminUrl' => (string) Env::get('MAIL_ASSISTANT_TOOLS_ADMIN_URL', ''),
             'config' => $config,
             'configError' => $configError,
-            'lastRun' => $this->logger->lastRun(),
-            'messageState' => $this->runner->messageStateSummary(),
-            'logLines' => $this->logger->tail(25),
+            'lastRun' => $lastRun,
+            'messageState' => $messageState,
+            'logLines' => $logLines,
+            'messageCopies' => $messageCopies,
+            'ui' => [
+                'overview' => $this->buildOverviewSummary($config, $configError, $lastRun, $messageState, $messageCopies),
+                'activity' => $this->buildLastRunMailboxCards($lastRun, $messageCopies),
+                'history' => $this->buildHistoryMailboxCards($messageState),
+                'config' => $this->buildConfigSummary($config),
+                'logs' => $this->buildLogSummary($logLines),
+            ],
             'imapAvailable' => function_exists('imap_open'),
             'projectRoot' => ProjectPaths::root(),
             'ajaxBase' => $this->requestBasePath(),
         ];
+    }
+
+    private function buildOverviewSummary(array $config, ?string $configError, array $lastRun, array $messageState, array $messageCopies): array
+    {
+        $mailboxes = array_values((array) ($config['mailboxes'] ?? []));
+        $ruleCount = 0;
+        $noMatchRuleCount = 0;
+        foreach ($mailboxes as $mailbox) {
+            $ruleCount += count((array) ($mailbox['rules'] ?? []));
+            $noMatchRuleCount += count((array) (($mailbox['defaults']['generic_no_match_rules'] ?? null) ?: []));
+        }
+
+        return [
+            [
+                'label' => 'Configured mailboxes',
+                'value' => count($mailboxes),
+                'note' => $configError ? 'Config fetch failed.' : 'Fetched from Tools config.',
+                'tone' => $configError ? 'danger' : 'primary',
+            ],
+            [
+                'label' => 'Reply rules',
+                'value' => $ruleCount,
+                'note' => 'Explicit matched-rule automation rows.',
+                'tone' => 'info',
+            ],
+            [
+                'label' => 'No-match fallback rows',
+                'value' => $noMatchRuleCount,
+                'note' => 'Ordered unmatched fallback paths from Tools.',
+                'tone' => 'info',
+            ],
+            [
+                'label' => 'Last run handled',
+                'value' => (int) ($lastRun['messages_handled'] ?? 0),
+                'note' => 'Handled in the latest saved run.',
+                'tone' => ((int) ($lastRun['messages_handled'] ?? 0)) > 0 ? 'success' : 'muted',
+            ],
+            [
+                'label' => 'Last run skipped',
+                'value' => (int) ($lastRun['messages_skipped'] ?? 0),
+                'note' => 'Unread messages left untouched or deferred.',
+                'tone' => ((int) ($lastRun['messages_skipped'] ?? 0)) > 0 ? 'warning' : 'muted',
+            ],
+            [
+                'label' => 'Local history records',
+                'value' => (int) ($messageState['total_records'] ?? 0),
+                'note' => 'Diagnostic continuity history under storage/state.',
+                'tone' => 'muted',
+            ],
+            [
+                'label' => 'Saved message copies',
+                'value' => count($messageCopies),
+                'note' => 'Recent local cached copies with optional headers/body preview.',
+                'tone' => 'muted',
+            ],
+        ];
+    }
+
+    private function buildLastRunMailboxCards(array $lastRun, array $messageCopies): array
+    {
+        $copyIndex = $this->indexMessageCopies($messageCopies);
+        $cards = [];
+
+        foreach ((array) ($lastRun['mailboxes'] ?? []) as $mailbox) {
+            if (!is_array($mailbox)) {
+                continue;
+            }
+
+            $messages = [];
+            foreach ((array) ($mailbox['message_results'] ?? []) as $message) {
+                if (!is_array($message)) {
+                    continue;
+                }
+
+                $copy = $this->findMessageCopyForResult($message, $copyIndex);
+                $messages[] = [
+                    'uid' => (int) ($message['uid'] ?? 0),
+                    'message_id' => (string) ($message['message_id'] ?? ''),
+                    'message_key' => (string) ($message['message_key'] ?? ''),
+                    'thread_key' => (string) ($message['thread_key'] ?? ''),
+                    'in_reply_to' => (string) ($message['in_reply_to'] ?? ''),
+                    'references' => array_values((array) ($message['references'] ?? [])),
+                    'subject' => (string) ($message['subject'] ?? ''),
+                    'subject_normalized' => (string) ($message['subject_normalized'] ?? ''),
+                    'from' => (string) ($message['from'] ?? ''),
+                    'to' => (string) ($message['to'] ?? ''),
+                    'date' => (string) ($message['date'] ?? ''),
+                    'outcome' => (string) ($message['outcome'] ?? ''),
+                    'reason' => (string) ($message['reason'] ?? ''),
+                    'reason_label' => $this->humanizeIdentifier((string) ($message['reason'] ?? '')),
+                    'body_excerpt' => (string) (($message['body_excerpt'] ?? null) ?: ($copy['body_excerpt'] ?? '')),
+                    'selected_rule' => is_array($message['selected_rule'] ?? null) ? $message['selected_rule'] : null,
+                    'matching_rule_count' => (int) ($message['matching_rule_count'] ?? 0),
+                    'matching_rules' => array_values((array) ($message['matching_rules'] ?? [])),
+                    'generic_ai_decision' => is_array($message['generic_ai_decision'] ?? null) ? $message['generic_ai_decision'] : [],
+                    'reply_message_id' => (string) ($message['reply_message_id'] ?? ''),
+                    'reply_transport' => (string) ($message['reply_transport'] ?? ''),
+                    'rule_resolution_source' => (string) ($message['rule_resolution_source'] ?? ''),
+                    'reused_from_message_id' => (string) ($message['reused_from_message_id'] ?? ''),
+                    'copy' => $copy,
+                ];
+            }
+
+            $cards[] = [
+                'id' => (int) ($mailbox['id'] ?? 0),
+                'name' => (string) ($mailbox['name'] ?? ''),
+                'scanned' => (int) ($mailbox['scanned'] ?? 0),
+                'handled' => (int) ($mailbox['handled'] ?? 0),
+                'skipped' => (int) ($mailbox['skipped'] ?? 0),
+                'failed' => (int) ($mailbox['failed'] ?? 0),
+                'assistant_sent_skipped' => (int) ($mailbox['assistant_sent_skipped'] ?? 0),
+                'read_skipped' => (int) ($mailbox['read_skipped'] ?? 0),
+                'messages' => $messages,
+                'errors' => array_values((array) ($mailbox['errors'] ?? [])),
+            ];
+        }
+
+        return $cards;
+    }
+
+    private function buildHistoryMailboxCards(array $messageState): array
+    {
+        $cards = [];
+        foreach ((array) ($messageState['mailboxes'] ?? []) as $mailboxId => $mailbox) {
+            if (!is_array($mailbox)) {
+                continue;
+            }
+
+            $cards[] = [
+                'id' => (string) $mailboxId,
+                'count' => (int) ($mailbox['count'] ?? 0),
+                'count_pending' => (int) ($mailbox['count_pending'] ?? 0),
+                'count_already_replied' => (int) ($mailbox['count_already_replied'] ?? 0),
+                'status_counts' => (array) ($mailbox['status_counts'] ?? []),
+                'recent' => array_values((array) ($mailbox['recent'] ?? [])),
+                'recent_all' => array_values((array) ($mailbox['recent_all'] ?? [])),
+            ];
+        }
+
+        return $cards;
+    }
+
+    private function buildConfigSummary(array $config): array
+    {
+        $mailboxes = [];
+        foreach ((array) ($config['mailboxes'] ?? []) as $mailbox) {
+            if (!is_array($mailbox)) {
+                continue;
+            }
+
+            $defaults = (array) ($mailbox['defaults'] ?? []);
+            $rules = array_values((array) ($mailbox['rules'] ?? []));
+            $noMatchRules = array_values((array) (($defaults['generic_no_match_rules'] ?? null) ?: []));
+
+            $mailboxes[] = [
+                'id' => (int) ($mailbox['id'] ?? 0),
+                'name' => (string) ($mailbox['name'] ?? ''),
+                'imap' => [
+                    'host' => (string) (($mailbox['imap']['host'] ?? null) ?: ''),
+                    'port' => (int) (($mailbox['imap']['port'] ?? null) ?: 0),
+                    'folder' => (string) (($mailbox['imap']['folder'] ?? null) ?: 'INBOX'),
+                    'encryption' => (string) (($mailbox['imap']['encryption'] ?? null) ?: ''),
+                ],
+                'defaults' => [
+                    'from_name' => (string) ($defaults['from_name'] ?? ''),
+                    'from_email' => (string) ($defaults['from_email'] ?? ''),
+                    'run_limit' => (int) ($defaults['run_limit'] ?? 0),
+                    'footer' => (string) ($defaults['footer'] ?? ''),
+                    'generic_no_match_ai_enabled' => !empty($defaults['generic_no_match_ai_enabled']),
+                    'spam_score_reply_threshold' => $defaults['spam_score_reply_threshold'] ?? null,
+                ],
+                'rule_count' => count($rules),
+                'no_match_rule_count' => count($noMatchRules),
+                'rules' => array_map(function (array $rule): array {
+                    return [
+                        'id' => (int) ($rule['id'] ?? 0),
+                        'name' => (string) ($rule['name'] ?? ''),
+                        'sort_order' => (int) ($rule['sort_order'] ?? 0),
+                        'match' => (array) ($rule['match'] ?? []),
+                        'reply_enabled' => !empty($rule['reply']['enabled']),
+                        'ai_enabled' => !empty($rule['reply']['ai_enabled']),
+                        'post_handle' => (array) ($rule['post_handle'] ?? []),
+                    ];
+                }, $rules),
+                'no_match_rules' => array_map(function (array $row): array {
+                    return [
+                        'id' => (int) ($row['id'] ?? 0),
+                        'sort_order' => (int) ($row['sort_order'] ?? 0),
+                        'if' => (string) (($row['if'] ?? null) ?: ($row['if_condition'] ?? null) ?: ''),
+                        'instruction' => (string) ($row['instruction'] ?? ''),
+                        'is_active' => !array_key_exists('is_active', $row) || !empty($row['is_active']),
+                    ];
+                }, $noMatchRules),
+            ];
+        }
+
+        return [
+            'user' => is_array($config['user'] ?? null) ? $config['user'] : [],
+            'token' => is_array($config['token'] ?? null) ? $config['token'] : [],
+            'mailboxes' => $mailboxes,
+        ];
+    }
+
+    private function buildLogSummary(array $logLines): array
+    {
+        $entries = [];
+        foreach ($logLines as $line) {
+            $line = trim((string) $line);
+            if ($line === '') {
+                continue;
+            }
+
+            $entries[] = [
+                'line' => $line,
+                'level' => $this->extractLogLevel($line),
+            ];
+        }
+
+        return $entries;
+    }
+
+    private function extractLogLevel(string $line): string
+    {
+        if (preg_match('/]\s+([A-Z]+)\s+/u', $line, $matches) === 1) {
+            return strtolower((string) ($matches[1] ?? 'info'));
+        }
+
+        return 'info';
+    }
+
+    private function humanizeIdentifier(string $value): string
+    {
+        $value = trim($value);
+        if ($value === '') {
+            return '';
+        }
+
+        $value = str_replace(['_', '-'], ' ', $value);
+
+        return ucfirst($value);
+    }
+
+    private function loadRecentMessageCopies(int $limit = 20): array
+    {
+        $dir = ProjectPaths::messageCopies();
+        if (!is_dir($dir)) {
+            return [];
+        }
+
+        $files = glob($dir . DIRECTORY_SEPARATOR . '*.json') ?: [];
+        usort($files, static function (string $left, string $right): int {
+            return filemtime($right) <=> filemtime($left);
+        });
+
+        $copies = [];
+        foreach (array_slice($files, 0, max(1, $limit)) as $file) {
+            $decoded = json_decode((string) @file_get_contents($file), true);
+            if (!is_array($decoded)) {
+                continue;
+            }
+
+            $message = is_array($decoded['message'] ?? null) ? $decoded['message'] : [];
+            $headers = is_array($message['headers_map'] ?? null) ? $message['headers_map'] : [];
+            $copies[] = [
+                'path' => $file,
+                'filename' => basename($file),
+                'saved_at' => (string) ($decoded['saved_at'] ?? ''),
+                'reason' => (string) ($decoded['reason'] ?? ''),
+                'uid' => (int) ($message['uid'] ?? 0),
+                'message_id' => (string) ($message['message_id'] ?? ''),
+                'message_key' => (string) ($message['message_key'] ?? ''),
+                'subject' => (string) ($message['subject'] ?? ''),
+                'from' => (string) ($message['from'] ?? ''),
+                'to' => (string) ($message['to'] ?? ''),
+                'date' => (string) ($message['date'] ?? ''),
+                'headers_map' => $headers,
+                'body_excerpt' => $this->excerpt((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 900),
+            ];
+        }
+
+        return $copies;
+    }
+
+    private function indexMessageCopies(array $copies): array
+    {
+        $index = [
+            'message_key' => [],
+            'message_id' => [],
+            'uid' => [],
+        ];
+
+        foreach ($copies as $copy) {
+            if (!is_array($copy)) {
+                continue;
+            }
+
+            $messageKey = strtolower(trim((string) ($copy['message_key'] ?? '')));
+            $messageId = strtolower(trim((string) ($copy['message_id'] ?? '')));
+            $uid = (int) ($copy['uid'] ?? 0);
+
+            if ($messageKey !== '' && !isset($index['message_key'][$messageKey])) {
+                $index['message_key'][$messageKey] = $copy;
+            }
+            if ($messageId !== '' && !isset($index['message_id'][$messageId])) {
+                $index['message_id'][$messageId] = $copy;
+            }
+            if ($uid > 0 && !isset($index['uid'][(string) $uid])) {
+                $index['uid'][(string) $uid] = $copy;
+            }
+        }
+
+        return $index;
+    }
+
+    private function findMessageCopyForResult(array $message, array $copyIndex): ?array
+    {
+        $messageKey = strtolower(trim((string) ($message['message_key'] ?? '')));
+        if ($messageKey !== '' && isset($copyIndex['message_key'][$messageKey])) {
+            return $copyIndex['message_key'][$messageKey];
+        }
+
+        $messageId = strtolower(trim((string) ($message['message_id'] ?? '')));
+        if ($messageId !== '' && isset($copyIndex['message_id'][$messageId])) {
+            return $copyIndex['message_id'][$messageId];
+        }
+
+        $uid = (int) ($message['uid'] ?? 0);
+        if ($uid > 0 && isset($copyIndex['uid'][(string) $uid])) {
+            return $copyIndex['uid'][(string) $uid];
+        }
+
+        return null;
+    }
+
+    private function excerpt(string $text, int $maxLength = 300): string
+    {
+        $text = trim(preg_replace('/\s+/u', ' ', $text) ?? $text);
+        if ($text === '') {
+            return '';
+        }
+
+        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+            if (mb_strlen($text, 'UTF-8') > $maxLength) {
+                return rtrim(mb_substr($text, 0, $maxLength, 'UTF-8')) . '…';
+            }
+        } elseif (strlen($text) > $maxLength) {
+            return rtrim(substr($text, 0, $maxLength)) . '...';
+        }
+
+        return $text;
     }
 
     private function handleAjax(string $method): void

@@ -139,9 +139,11 @@ Current UI features:
 - AJAX refresh of config/log/last-run panels without reloading the page
 - AJAX self-test action
 - AJAX-triggered safe dry-run action (reuses the same PHP runner as CLI)
-- config preview fetched live from Tools
-- last-run summary preview from `storage/last-run.json`
-- optional local message-history preview from `storage/state/message-state.json` when history mode has been requested previously
+- mail-client-style activity cards for the latest run instead of only raw JSON blocks
+- expandable per-message diagnostics showing selected rule/no-match decision, thread metadata, and optional saved local headers
+- human-readable Tools config summary (mailboxes, rule counts, unmatched fallback rows) with raw JSON still available under collapsible advanced sections
+- optional local message-history summary from `storage/state/message-state.json` when history mode has been requested previously
+- recent local saved message copies are now reused as body/header preview sources when available, so header inspection becomes possible without turning the dashboard into a full IMAP admin surface
 - direct link back to Tools admin
 - recent local log tail
 
@@ -149,6 +151,7 @@ Current UI features:
 
 - **Cron/manual execution should still use PHP CLI**: `php run ...`
 - The web UI calls the same runner class for manual checks and dry-runs, but it is intended as an operator surface, not as the primary cron transport.
+- The dashboard is now intentionally a lightweight operator inbox, not a full standalone admin clone of Tools. Mailbox/rule administration should still happen primarily in Tools, while the local UI focuses on inspection, diagnostics, and future lightweight manual handling.
 
 ## Cron example
 
@@ -186,6 +189,7 @@ Rules can decide per message whether AI is enabled.
 - Local message-state is now also used as a thread continuity hint: when `In-Reply-To` / `References` link a follow-up to a previously handled conversation, the runner can reuse the earlier matched rule even if the newest mail itself no longer matches the original subject/body criteria.
 - The standalone runner now also generates and stores an explicit outgoing `Message-ID` for replies it sends itself, which makes later Gmail/Outlook follow-ups far more likely to link back to the locally tracked conversation instead of only referencing the assistant's last sent mail.
 - If an older or malformed follow-up mail arrives without usable `In-Reply-To` / `References`, the runner can now still recover continuity through normalized subject + same participants (`from` / `to`) before it gives up as no-match.
+- If an already-approved unmatched thread comes back through explicit reply headers, the standalone client can now continue that same unmatched row directly instead of re-running the first allow-condition triage from scratch for the same conversation.
 - The token owner still needs approved `provider_openai` access in Tools unless that user is admin.
 - Outgoing replies are now sent as `multipart/alternative`: a plain-text part is kept for compatibility, while the visible mail is also rendered as a small styled HTML card for more polished support replies.
 - Outgoing assistant replies are now stamped with `X-Tornevall-Mail-Assistant: sent` so follow-up polling can identify assistant-originated mail and avoid self-reply loops.
@@ -213,6 +217,7 @@ Rules can decide per message whether AI is enabled.
 - Rows are evaluated in `sort_order` order and may fall through to later rows when an earlier row is rejected.
 - That same fall-through now also applies when one unmatched row hits a row-local AI/API evaluation error; the runner logs the failed row and still tries later active rows before giving up.
 - If a reply-chain follow-up is linked to an earlier handled unmatched conversation, the runner now prioritizes the previously used unmatched row first before checking the rest of the active rows, which helps repository/API follow-ups stay on the same support path.
+- For explicitly linked follow-ups in an already-approved unmatched thread, the runner can now skip the first allow-condition re-check entirely and go straight to generating the continuation reply on that same previously used unmatched row.
 - The AI is told to ignore outer SpamAssassin wrapper prose when it only forwards the original email, while still using SpamAssassin score/tests as safety hints.
 - Mailbox-level unmatched-mail fallback can now also carry its own `generic_no_match_ai_reasoning_effort` override from Tools config; Tools still decides per selected model whether reasoning is actually forwarded.
 - The config payload from Tools can now also include additive `user.ai_daily_budget` metadata so operators can inspect the effective AI token cap/remaining budget that Mail Support Assistant shares with the SocialGPT reply endpoint.
@@ -237,6 +242,7 @@ Rules can decide per message whether AI is enabled.
 - No-match diagnostics now also include `generic_ai_decision.evaluated_no_match_rules[]`, so operators can see which unmatched fallback rows were actually tried, in order, before a reply was sent or the message was left unread.
 - Run summaries now separate `messages_read_skipped` from other skipped categories, so mail that is already marked read at ingest is tracked clearly and does not need to be interpreted as `no_matching_rule` noise.
 - Run summaries now also expose per-mailbox `message_results[]` entries so operators can see what happened to each scanned message during the current pass (`handled`, `skipped`, `warning`, `error`).
+- Those per-message diagnostics now also expose `thread_key`, `in_reply_to`, and `references[]`, which makes reply-chain troubleshooting much easier when a message unexpectedly falls through to no-match.
 - History-specific fields such as `message_state` and `message_state_records[]` are hidden by default and only included when `--include-history` is used.
 - When a reply is sent successfully but the IMAP finalize step (`markSeen`, move, or delete) fails, the run now records that as an explicit warning reason such as `rule_matched_replied_imap_finalize_failed` instead of silently looking fully handled.
 - The runner now parses SpamAssassin headers so heavily flagged messages can be skipped before handling, while wrapper-style SpamAssassin rewrites can still be copied locally and stripped from the body before rule matching/AI.

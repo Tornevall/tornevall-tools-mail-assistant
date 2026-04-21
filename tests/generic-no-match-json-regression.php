@@ -59,6 +59,11 @@ $client = new QueueingGenericNoMatchToolsApiClient([
     [
         'ok' => true,
         'model' => 'gpt-4o-mini',
+        'response' => "```json\n{“can_reply”: false, “certainty”: “low”, “reason”: “Needs human follow-up.”, “risk_flags”: [“missing_context”], “reply”: “”,}\n```",
+    ],
+    [
+        'ok' => true,
+        'model' => 'gpt-4o-mini',
         'response' => json_encode([
             'can_reply' => true,
             'certainty' => 'medium',
@@ -101,6 +106,12 @@ $invalidJson = $client->evaluateGenericNoMatchReply($mailbox, $message, $options
 assertSameValue(false, $invalidJson['can_reply'] ?? null, 'Invalid JSON must never be replyable.');
 assertSameValue('no_matching_rule_generic_ai_invalid_json', $invalidJson['decision_reason_code'] ?? null, 'Invalid JSON must produce the invalid-json reason code.');
 assertSameValue('', $invalidJson['reply'] ?? null, 'Invalid JSON must not yield a reply payload.');
+
+$repairedJson = $client->evaluateGenericNoMatchReply($mailbox, $message, $options);
+assertSameValue(false, $repairedJson['can_reply'] ?? null, 'Repairable sloppy JSON must still preserve a deny decision.');
+assertSameValue('low', $repairedJson['certainty'] ?? null, 'Repairable sloppy JSON should preserve certainty.');
+assertSameValue('Needs human follow-up.', $repairedJson['reason'] ?? null, 'Repairable sloppy JSON should preserve the reason text.');
+assertSameValue('', $repairedJson['reply'] ?? null, 'Repairable deny JSON must not produce a reply payload.');
 
 $notCertain = $client->evaluateGenericNoMatchReply($mailbox, $message, $options);
 assertSameValue(false, $notCertain['can_reply'] ?? null, 'Medium-certainty unmatched mail must still be rejected.');

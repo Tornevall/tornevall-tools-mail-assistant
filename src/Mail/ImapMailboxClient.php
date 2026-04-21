@@ -129,6 +129,9 @@ class ImapMailboxClient
         $headerMap = MimeDecoder::parseHeaders($rawHeaders);
         $structure = @imap_fetchstructure($stream, $messageNo);
         [$textBody, $htmlBody] = $this->extractBodies($messageNo, $structure);
+        if ($textBody === '' && $htmlBody !== '') {
+            $textBody = MimeDecoder::convertHtmlToText($htmlBody);
+        }
         $cleanedBody = MimeDecoder::stripSpamAssassinWrapper($textBody);
         $bodyText = (string) ($cleanedBody['body'] ?? $textBody);
         $bodyTextReplyAware = MimeDecoder::stripQuotedReplyText($bodyText);
@@ -211,13 +214,23 @@ class ImapMailboxClient
 
         $section = $partNumber === '' ? '1' : $partNumber;
         $raw = (string) @imap_fetchbody($stream, $messageNo, $section, FT_PEEK);
-        $decoded = MimeDecoder::decodePartBody($raw, (int) ($structure->encoding ?? 0));
+        $decoded = MimeDecoder::decodePartBody(
+            $raw,
+            (int) ($structure->encoding ?? 0),
+            MimeDecoder::extractStructureCharset($structure)
+        );
+        $type = (int) ($structure->type ?? 0);
         $subtype = strtoupper((string) ($structure->subtype ?? 'PLAIN'));
+
+        if ($type !== 0 && $subtype !== 'HTML' && $subtype !== 'PLAIN') {
+            return ['', ''];
+        }
 
         if ($subtype === 'HTML') {
             $htmlBody = $decoded;
+            $textBody = MimeDecoder::convertHtmlToText($decoded);
         } else {
-            $textBody = strip_tags($decoded);
+            $textBody = MimeDecoder::normalizeText(strip_tags($decoded));
         }
 
         return [$textBody, $htmlBody];

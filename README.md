@@ -194,6 +194,8 @@ Rules can decide per message whether AI is enabled.
 - The standalone runner now also performs a local compliance check on returned AI text for critical instructions: if the generated reply violates an explicit English-only requirement, omits required redirect addresses, skips required “must state” facts, or claims responsibility/handling where the instruction says the notice should only be redirected, the reply is rejected instead of being sent.
 - When static footer mode is used, trailing AI-generated signoff blocks are now stripped repeatedly before footer append so replies do not end up with duplicated closings such as both `Best regards` and `Regards`.
 - Message bodies are now sanitized more aggressively before they are sent as AI request summary context: HTML/MIME noise, SpamAssassin wrapper text, forwarded `.eml` header dumps, and malformed embedded header blocks are stripped first so the actual original request survives.
+- HTML-only inbound mail is now converted into readable plain text before rule matching, unmatched-mail AI triage, appended request summaries, and saved local debug copies are built, so the runner no longer behaves as though only the subject exists when the mail body arrived as HTML.
+- MIME body decoding is now charset-aware, which improves body readability for non-UTF8 or malformed incoming mail instead of leaving that content garbled in summaries/AI context.
 - Clear-text contact-form mails that embed structured body lines like `From:`, `Subject:`, `Sender IP:`, and `Message Body:` now also keep the real problem paragraph in summaries/AI context instead of being truncated to only the first header-like line.
 - Reply-aware message parsing now strips common quoted history blocks before rule matching and AI summary generation, so follow-up emails in an existing thread can still match the intended support rule.
 - Local message-state is now also used as a thread continuity hint: when `In-Reply-To` / `References` link a follow-up to a previously handled conversation, the runner can reuse the earlier matched rule even if the newest mail itself no longer matches the original subject/body criteria.
@@ -223,6 +225,7 @@ Rules can decide per message whether AI is enabled.
 - The mailbox-owned `generic_no_match_if` / `generic_no_match_instruction` pair is treated as the very last unmatched fallback after those advanced rows.
 - The no-match AI path now asks Tools/OpenAI for a **strict JSON decision** instead of trusting any free-form reply text.
 - A generic fallback reply is sent only when the AI returns valid JSON with `can_reply=true`, `certainty="high"`, and a non-empty `reply` payload.
+- The standalone parser now also tolerates a few common sloppy JSON formatting mistakes from the provider/model (for example smart quotes or trailing commas) before it finally classifies the reply as invalid JSON.
 - If there are no valid active unmatched rows (non-empty `if` + `instruction`), the fallback is treated as unconfigured and no unmatched-mail AI reply is sent.
 - Rows are evaluated in `sort_order` order and may fall through to later rows when an earlier row is rejected.
 - That same fall-through now also applies when one unmatched row hits a row-local AI/API evaluation error; the runner logs the failed row and still tries later active rows before giving up.

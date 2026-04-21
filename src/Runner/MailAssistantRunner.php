@@ -749,7 +749,7 @@ class MailAssistantRunner
             'from_contains' => (string) ($message['from'] ?? ''),
             'to_contains' => (string) ($message['to'] ?? ''),
             'subject_contains' => (string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? '')),
-            'body_contains' => (string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')),
+            'body_contains' => $this->buildMessageBodyForMatching($message),
         ];
         $matches = [];
 
@@ -1881,6 +1881,8 @@ class MailAssistantRunner
                 'headers_map' => $message['headers_map'] ?? [],
                 'body_text_raw' => $message['body_text_raw'] ?? '',
                 'body_text' => $message['body_text'] ?? '',
+                'body_text_reply_aware' => $message['body_text_reply_aware'] ?? '',
+                'body_html' => $message['body_html'] ?? '',
                 'spam_assassin' => $message['spam_assassin'] ?? [],
             ],
         ];
@@ -1973,13 +1975,7 @@ class MailAssistantRunner
 
     private function buildStateMessageBodyExcerpt(array $message): string
     {
-        $candidates = [
-            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
-            (string) (($message['body_text'] ?? null) ?: ''),
-            (string) (($message['body_text_raw'] ?? null) ?: ''),
-        ];
-
-        foreach ($candidates as $candidate) {
+        foreach ($this->getMessageBodyCandidates($message) as $candidate) {
             $excerpt = $this->buildStateExcerpt($candidate, 500);
             if ($excerpt !== '') {
                 return $excerpt;
@@ -1992,6 +1988,42 @@ class MailAssistantRunner
     private function buildStateExcerpt(string $text, int $maxLength = 500): string
     {
         return MimeDecoder::extractRequestSummaryText($text, $maxLength);
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function getMessageBodyCandidates(array $message): array
+    {
+        $candidates = [
+            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
+            (string) (($message['body_text'] ?? null) ?: ''),
+        ];
+
+        $htmlBody = (string) (($message['body_html'] ?? null) ?: '');
+        if ($htmlBody !== '') {
+            $candidates[] = MimeDecoder::convertHtmlToText($htmlBody);
+            $candidates[] = $htmlBody;
+        }
+
+        $candidates[] = (string) (($message['body_text_raw'] ?? null) ?: '');
+
+        return array_values(array_filter(array_map(static function ($candidate): string {
+            return trim((string) $candidate);
+        }, $candidates), static function (string $candidate): bool {
+            return $candidate !== '';
+        }));
+    }
+
+    private function buildMessageBodyForMatching(array $message): string
+    {
+        foreach ($this->getMessageBodyCandidates($message) as $candidate) {
+            if ($candidate !== '') {
+                return $candidate;
+            }
+        }
+
+        return '';
     }
 
     private function rememberManualMessageAction(array $mailbox, array $message, string $status, string $reason, bool $dryRun, array $extra = []): void
@@ -2585,13 +2617,7 @@ class MailAssistantRunner
 
     private function buildOriginalRequestExcerpt(array $message, int $maxLength = 900): string
     {
-        $candidates = [
-            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
-            (string) (($message['body_text'] ?? null) ?: ''),
-            (string) (($message['body_text_raw'] ?? null) ?: ''),
-        ];
-
-        foreach ($candidates as $candidate) {
+        foreach ($this->getMessageBodyCandidates($message) as $candidate) {
             $excerpt = MimeDecoder::extractRequestSummaryText($candidate, $maxLength);
             if ($excerpt !== '') {
                 return $excerpt;

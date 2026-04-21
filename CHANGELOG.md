@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.36 - 2026-04-21
+
+- HTML-only inbound mail bodies are now converted into readable plain text before rule matching, unmatched-mail AI triage, appended **Summary of your request** excerpts, and saved local message copies are built, so the standalone client no longer falls back to acting like only the subject exists when the body arrived as HTML.
+- MIME body decoding is now charset-aware (`UTF-8`, `Windows-1252`, `ISO-8859-*` fallback detection/conversion), which makes malformed or non-UTF8 support mail far more likely to produce usable body text instead of garbled context.
+- The strict unmatched-mail AI parser now tolerates a few common sloppy JSON formatting mistakes from the model/provider (for example smart quotes or trailing commas) before it gives up as `no_matching_rule_generic_ai_invalid_json`.
+- Added regression coverage in `tests/html-body-decoding-regression.php`, and extended `tests/generic-no-match-json-regression.php` so slightly repairable JSON still yields a safe deny decision instead of always looking malformed.
+
 ## 0.3.35 - 2026-04-21
 
 - The standalone dashboard now behaves more like a real lightweight operator mail client: latest-run message cards can assign a local rule context, send a manual reply, or mark a message handled/read without waiting for another cron pass.

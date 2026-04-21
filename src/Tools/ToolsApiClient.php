@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-     private const CLIENT_VERSION = '0.3.35';
+     private const CLIENT_VERSION = '0.3.36';
 
     private string $baseUrl;
     private string $token;
@@ -333,7 +333,7 @@ class ToolsApiClient
             ];
         }
 
-        $decoded = json_decode($json, true);
+        $decoded = $this->decodeLenientJsonObject($json);
         if (!is_array($decoded)) {
             return [
                 'valid_json' => false,
@@ -403,6 +403,45 @@ class ToolsApiClient
         }
 
         return trim(substr($candidate, $start, $end - $start + 1));
+    }
+
+    private function decodeLenientJsonObject(string $json): ?array
+    {
+        $candidates = [];
+        $trimmed = trim($json);
+        if ($trimmed === '') {
+            return null;
+        }
+
+        $candidates[] = $trimmed;
+        $repaired = $this->repairCommonJsonFormattingIssues($trimmed);
+        if ($repaired !== $trimmed) {
+            $candidates[] = $repaired;
+        }
+
+        foreach ($candidates as $candidate) {
+            $decoded = json_decode($candidate, true);
+            if (is_array($decoded)) {
+                return $decoded;
+            }
+        }
+
+        return null;
+    }
+
+    private function repairCommonJsonFormattingIssues(string $json): string
+    {
+        $json = preg_replace('/^\xEF\xBB\xBF/u', '', $json) ?? $json;
+        $json = strtr($json, [
+            "\xE2\x80\x9C" => '"',
+            "\xE2\x80\x9D" => '"',
+            "\xE2\x80\x98" => "'",
+            "\xE2\x80\x99" => "'",
+            "\xC2\xA0" => ' ',
+        ]);
+        $json = preg_replace('/,\s*([}\]])/', '$1', $json) ?? $json;
+
+        return trim($json);
     }
 
     private function normalizeDecisionBool($value): ?bool
@@ -639,13 +678,7 @@ class ToolsApiClient
 
     private function buildIncomingMessageExcerpt(array $message, int $maxLength): string
     {
-        $candidates = [
-            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
-            (string) (($message['body_text'] ?? null) ?: ''),
-            (string) (($message['body_text_raw'] ?? null) ?: ''),
-        ];
-
-        foreach ($candidates as $candidate) {
+        foreach ($this->getMessageBodyCandidates($message) as $candidate) {
             $excerpt = $this->sanitizeSummaryText($candidate, $maxLength);
             if ($excerpt !== '') {
                 return $excerpt;
@@ -653,6 +686,31 @@ class ToolsApiClient
         }
 
         return '';
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function getMessageBodyCandidates(array $message): array
+    {
+        $candidates = [
+            (string) (($message['body_text_reply_aware'] ?? null) ?: ''),
+            (string) (($message['body_text'] ?? null) ?: ''),
+        ];
+
+        $htmlBody = (string) (($message['body_html'] ?? null) ?: '');
+        if ($htmlBody !== '') {
+            $candidates[] = MimeDecoder::convertHtmlToText($htmlBody);
+            $candidates[] = $htmlBody;
+        }
+
+        $candidates[] = (string) (($message['body_text_raw'] ?? null) ?: '');
+
+        return array_values(array_filter(array_map(static function ($candidate): string {
+            return trim((string) $candidate);
+        }, $candidates), static function (string $candidate): bool {
+            return $candidate !== '';
+        }));
     }
 
     private function buildThreadContextExcerpt(array $message, int $maxLength = 1800): string

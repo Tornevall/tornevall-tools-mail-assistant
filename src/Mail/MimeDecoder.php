@@ -28,7 +28,7 @@ class MimeDecoder
         return trim($value);
     }
 
-    public static function decodePartBody(string $body, int $encoding): string
+    public static function decodePartBody(string $body, int $encoding, ?string $charset = null): string
     {
         switch ($encoding) {
             case 3:
@@ -39,7 +39,95 @@ class MimeDecoder
                 break;
         }
 
+        $body = self::convertToUtf8($body, $charset);
+
         return self::normalizeText($body);
+    }
+
+    public static function convertToUtf8(string $text, ?string $charset = null): string
+    {
+        $text = (string) $text;
+        if ($text === '') {
+            return '';
+        }
+
+        $charset = self::normalizeCharsetName($charset);
+        if ($charset !== null && !in_array($charset, ['UTF-8', 'UTF8'], true)) {
+            if (function_exists('iconv')) {
+                $converted = @iconv($charset, 'UTF-8//IGNORE', $text);
+                if (is_string($converted) && $converted !== '') {
+                    $text = $converted;
+                }
+            } elseif (function_exists('mb_convert_encoding')) {
+                $converted = @mb_convert_encoding($text, 'UTF-8', $charset);
+                if (is_string($converted) && $converted !== '') {
+                    $text = $converted;
+                }
+            }
+        } elseif (!preg_match('//u', $text) && function_exists('mb_detect_encoding') && function_exists('mb_convert_encoding')) {
+            $detected = @mb_detect_encoding($text, ['UTF-8', 'Windows-1252', 'ISO-8859-1', 'ISO-8859-15'], true);
+            if (is_string($detected) && $detected !== '' && strtoupper($detected) !== 'UTF-8') {
+                $converted = @mb_convert_encoding($text, 'UTF-8', $detected);
+                if (is_string($converted) && $converted !== '') {
+                    $text = $converted;
+                }
+            }
+        }
+
+        return $text;
+    }
+
+    public static function convertHtmlToText(string $html): string
+    {
+        $html = self::normalizeText($html);
+        if ($html === '') {
+            return '';
+        }
+
+        $html = html_entity_decode($html, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $html = preg_replace('/<\s*br\s*\/?>/iu', "\n", $html) ?? $html;
+        $html = preg_replace('/<\s*\/\s*(p|div|section|article|header|footer|aside|li|ul|ol|table|tr|td|th|blockquote|h[1-6])\s*>/iu', "\n", $html) ?? $html;
+        $html = preg_replace('/<\s*li\b[^>]*>/iu', '- ', $html) ?? $html;
+        $html = preg_replace('/<\s*(script|style)\b[^>]*>.*?<\s*\/\s*\1\s*>/isu', '', $html) ?? $html;
+        $text = strip_tags($html);
+        $text = html_entity_decode((string) $text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+        $text = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F]+/u', ' ', $text) ?? $text;
+        $text = preg_replace('/[ \t]+\n/u', "\n", $text) ?? $text;
+        $text = preg_replace('/\n{3,}/u', "\n\n", $text) ?? $text;
+
+        return self::normalizeText($text);
+    }
+
+    public static function extractStructureCharset($structure): ?string
+    {
+        if (!is_object($structure)) {
+            return null;
+        }
+
+        foreach (['parameters', 'dparameters'] as $property) {
+            $items = $structure->{$property} ?? null;
+            if (!is_array($items)) {
+                continue;
+            }
+
+            foreach ($items as $item) {
+                if (!is_object($item)) {
+                    continue;
+                }
+
+                $attribute = strtoupper(trim((string) ($item->attribute ?? '')));
+                if ($attribute !== 'CHARSET') {
+                    continue;
+                }
+
+                $charset = self::normalizeCharsetName((string) ($item->value ?? ''));
+                if ($charset !== null) {
+                    return $charset;
+                }
+            }
+        }
+
+        return null;
     }
 
     public static function normalizeText(string $body): string
@@ -223,7 +311,9 @@ class MimeDecoder
         $excerpt = preg_replace('/\n{3,}/u', "\n\n", $excerpt) ?? $excerpt;
         $excerpt = self::cropToLikelyBodyStart($excerpt);
         $bodyMarkerExcerpt = self::extractFromLikelyBodyMarkers($bodyMarkerSource, $maxLength);
-        if ($bodyMarkerExcerpt !== '' && strlen($bodyMarkerExcerpt) > strlen($excerpt)) {
+        $excerptHasStructuredBodyFields = preg_match('/^Sender(?:\s+IP)?:/im', $excerpt) === 1
+            || preg_match('/^Message\s+Body:/im', $excerpt) === 1;
+        if ($bodyMarkerExcerpt !== '' && strlen($bodyMarkerExcerpt) > strlen($excerpt) && !$excerptHasStructuredBodyFields) {
             $excerpt = $bodyMarkerExcerpt;
         }
         if ($excerpt === '') {
@@ -403,9 +493,11 @@ class MimeDecoder
 
     private static function normalizeEmbeddedHeaderRuns(string $text): string
     {
-        $headerNames = '(Subject|From|Date|To|Cc|Bcc|Reply-To|Message-ID|MIME-Version|Content-Type|Content-Transfer-Encoding|Return-Path|Delivered-To|Authentication-Results|Received|Auto-Submitted|DKIM-Signature|X-[A-Za-z0-9-]+|ARC-[A-Za-z-]+|Ämne|Amne|mne|Från|Fran|Frn|Datum|Till|Kopia|Svar till|Meddelande-ID)';
+        $headerNames = 'Subject|From|Date|To|Cc|Bcc|Reply-To|Message-ID|MIME-Version|Content-Type|Content-Transfer-Encoding|Return-Path|Delivered-To|Authentication-Results|Received|Auto-Submitted|DKIM-Signature|X-[A-Za-z0-9-]+|ARC-[A-Za-z-]+|Ämne|Amne|mne|Från|Fran|Frn|Datum|Till|Kopia|Svar till|Meddelande-ID';
 
-        $text = preg_replace('/(?<!\n)(' . $headerNames . '):\s*/u', "\n$1: ", $text) ?? $text;
+        $text = preg_replace_callback('/(?<!\n)(' . $headerNames . '):\s*/u', static function (array $matches): string {
+            return "\n" . (string) ($matches[1] ?? '') . ': ';
+        }, $text) ?? $text;
 
         return self::normalizeText($text);
     }
@@ -589,7 +681,7 @@ class MimeDecoder
             return '';
         }
 
-        if (preg_match('/(?:Notice ID:|Dear\b|Hello\b|Hej\b|Hi\b|We are\b)/u', $text, $match, PREG_OFFSET_CAPTURE) !== 1) {
+        if (preg_match('/Notice ID:|Dear\b|Hello\b|Hej\b|Hi\b|We are\b/u', $text, $match, PREG_OFFSET_CAPTURE) !== 1) {
             return '';
         }
 
@@ -611,6 +703,22 @@ class MimeDecoder
         }
 
         return trim($excerpt);
+    }
+
+    private static function normalizeCharsetName(?string $charset): ?string
+    {
+        $charset = trim((string) ($charset ?? ''));
+        if ($charset === '') {
+            return null;
+        }
+
+        $charset = trim($charset, "\"'");
+        $charset = preg_replace('/\s+/u', '', $charset) ?? $charset;
+        if ($charset === '') {
+            return null;
+        }
+
+        return strtoupper($charset);
     }
 }
 

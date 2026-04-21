@@ -42,6 +42,7 @@ It is expected to:
 - `tests/ai-instruction-compliance-regression.php` - verifies obviously contradictory AI replies are rejected against strict redirect/no-responsibility instructions
 - `tests/body-only-no-summary-regression.php` - verifies `write only the email body` instructions suppress the appended request-summary block
 - `tests/contact-form-summary-regression.php` - verifies clear-text contact-form mails with `From:` / `Subject:` / `Sender IP:` / `Message Body:` lines still preserve the real issue text in summaries and appended reply excerpts
+- `tests/html-body-decoding-regression.php` - verifies HTML-only inbound mail is decoded into usable body text for AI context and `body_contains` rule matching
 - `tests/reply-chain-rule-reuse-regression.php` - verifies a follow-up reply can reuse the earlier matched rule from local thread-linked history
 - `tests/reply-chain-generic-no-match-reuse-regression.php` - verifies a follow-up reply can prioritize the earlier unmatched fallback row from the same reply chain
 - `tests/reply-chain-subject-fallback-regression.php` - verifies older/malformed follow-ups can still reuse the earlier selected rule through normalized subject + same participants when reply headers are missing
@@ -80,6 +81,7 @@ It is expected to:
   historical blocks are stripped before body matching/AI summaries, and outgoing replies preserve `In-Reply-To` /
   `References` headers.
 - Reply-aware parsing must not treat contact-form style body lines (`From:` / `Subject:` / `Sender IP:` / `Message Body:` inside the plain-text body itself) as automatic quoted-history cutoffs; those lines may be the only path to the actual problem description and sender IP.
+- HTML-only or non-UTF8 inbound mail must not silently degrade into subject-only handling; MIME decoding should extract charset-aware plain text from HTML bodies before rule matching, AI context building, or appended request-summary generation runs.
 - Reply-chain continuity is now also rule-aware: when `In-Reply-To` / `References` link a new unread message to an earlier handled conversation, the runner may reuse the earlier matched rule or prioritize the earlier unmatched fallback row before it gives up as no-match.
 - Reply continuity now also has two extra safety nets: locally sent replies generate/store an explicit outgoing `reply_message_id`, and older/malformed follow-ups without usable reply headers may still recover continuity through normalized subject + same participants (`from` / `to`).
 - When a reply chain is explicitly linked to a previously approved unmatched thread, the runner may now continue that same unmatched row directly instead of re-running the initial allow-condition classifier for the same conversation.
@@ -117,6 +119,7 @@ It is expected to:
   untouched unless the config explicitly opts into post-handle mutation without reply.
 - Mailbox-level `generic_no_match_*` AI settings are only for the unmatched-mail fallback path and must not replace matched rule AI overrides.
 - The unmatched-mail fallback must now be enabled only by the mailbox checkbox coming from Tools config (`generic_no_match_ai_enabled`); env-only toggles must not silently turn it on anymore.
+- The unmatched-mail JSON parser may be strict about final safety decisions, but it should still tolerate small provider-formatting mistakes such as smart quotes or trailing commas before it concludes that the reply was malformed JSON.
 - If that checkbox is off, the standalone runner should not even materialize/evaluate advanced unmatched rows or the mailbox-level last fallback, even when those text fields still contain older saved values.
 - Ordered `generic_no_match_rules[]` rows are still the advanced unmatched checks, but the mailbox-owned `generic_no_match_if` / `generic_no_match_instruction` pair is now the strict last unmatched fallback after those rows.
 - If that strict last unmatched fallback actually sends a reply, the runner should finalize the message by marking it seen immediately so the next unread poll does not handle it again.

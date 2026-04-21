@@ -264,8 +264,9 @@ assertTrueCondition(count($rejectingTools->ruleEvaluations) === 2, 'Expected bot
 assertTrueCondition(($rejectingResult['mailboxes'][0]['message_results'][0]['reason'] ?? '') === 'no_matching_rule_generic_ai_rejected', 'Expected the run summary to keep the strict reject reason when all unmatched rows reject.');
 assertTrueCondition(count((array) ($rejectingResult['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'] ?? [])) === 2, 'Expected rejection diagnostics to record both evaluated unmatched rows.');
 assertTrueCondition(((array) ($rejectingResult['mailboxes'][0]['message_results'][0]['generic_ai_decision']['risk_flags'] ?? [])) === ['support_row_reject'], 'Expected the last rejecting row risk flags to remain visible in diagnostics.');
-assertTrueCondition($rejectingImap->markSeenCalls === [], 'Rejected unmatched rows must not mark the message seen.');
-assertTrueCondition($rejectingImap->markUnseenCalls === [901], 'Rejected unmatched rows must explicitly preserve unread state when IMAP supports it.');
+assertTrueCondition(($rejectingResult['mailboxes'][0]['message_results'][0]['post_handle_action'] ?? '') === 'mark_seen', 'Terminal unmatched rejections should now be marked read for manual follow-up.');
+assertTrueCondition($rejectingImap->markSeenCalls === [901], 'Rejected terminal unmatched rows should now mark the message seen to stop endless retries.');
+assertTrueCondition($rejectingImap->markUnseenCalls === [], 'Rejected terminal unmatched rows should no longer force unread preservation.');
 
 echo "generic-no-match-rows-regression: ok\n";
 

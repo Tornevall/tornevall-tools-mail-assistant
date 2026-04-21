@@ -75,7 +75,27 @@
         .message-meta { color:var(--muted); font-size:.9rem; display:grid; gap:4px; }
         .message-excerpt { margin:14px 0 0; padding:12px 14px; background:#f8fafc; border:1px solid #e2e8f0; border-radius:12px; color:#1e293b; white-space:pre-wrap; }
         .message-actions-note { margin-top:12px; padding:12px 14px; background:#eff6ff; border:1px solid #bfdbfe; border-radius:12px; color:#1d4ed8; font-size:.92rem; }
+        .alert-list { display:grid; gap:12px; margin:0 0 18px; }
+        .alert-card { padding:14px 16px; border-radius:12px; border:1px solid var(--border); background:#fff; box-shadow:var(--shadow); }
+        .alert-card h3 { margin:0 0 6px; font-size:1rem; }
+        .alert-card p { margin:0; white-space:pre-wrap; }
+        .alert-card.alert-danger { border-color:#fecaca; background:#fef2f2; color:#7f1d1d; }
+        .alert-card.alert-warning { border-color:#fde68a; background:#fffbeb; color:#92400e; }
+        .alert-card.alert-info { border-color:#bfdbfe; background:#eff6ff; color:#1d4ed8; }
         .info-note { margin-top:12px; padding:12px 14px; background:#f8fafc; border:1px solid #cbd5e1; border-radius:12px; color:#334155; font-size:.92rem; }
+        .operator-form { margin-top:14px; display:grid; gap:10px; padding:14px; border:1px solid #dbeafe; border-radius:12px; background:#f8fbff; }
+        .operator-form h4 { margin:0; font-size:1rem; }
+        .operator-grid { display:grid; grid-template-columns: minmax(220px, 280px) 1fr; gap:10px; }
+        .operator-grid label, .operator-note label { display:grid; gap:6px; font-size:.88rem; color:var(--muted); font-weight:700; }
+        .operator-grid select, .operator-grid textarea, .operator-note textarea { width:100%; padding:10px 12px; border:1px solid #cbd5e1; border-radius:10px; font:inherit; background:#fff; color:var(--text); }
+        .operator-grid textarea, .operator-note textarea { min-height:110px; resize:vertical; }
+        .operator-actions { display:flex; gap:10px; flex-wrap:wrap; }
+        .operator-actions .btn { padding:9px 12px; }
+        .operator-inline-status { display:none; padding:10px 12px; border-radius:10px; border:1px solid #cbd5e1; font-size:.9rem; }
+        .operator-inline-status.active { display:block; }
+        .operator-inline-status.success { border-color:#86efac; background:#f0fdf4; color:#166534; }
+        .operator-inline-status.error { border-color:#fecaca; background:#fef2f2; color:#991b1b; }
+        .operator-inline-status.pending { border-color:#bfdbfe; background:#eff6ff; color:#1d4ed8; }
         .rule-card { padding:14px; border:1px solid #e2e8f0; border-radius:12px; background:#fff; }
         .rule-card h3 { margin:0; font-size:1rem; }
         .rule-card p { margin:.45rem 0 0; }
@@ -122,6 +142,8 @@
         <button class="btn" type="button" style="background:#b91c1c;" data-action="open-cleanup">🗑 Cleanup storage</button>
     </div>
     <div class="statusline" id="ajax-status">Ready.</div>
+
+    <div class="alert-list" id="alerts-panel"></div>
 
     <!-- Cleanup modal -->
     <div id="cleanup-modal" style="display:none; position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:999; align-items:center; justify-content:center;">
@@ -192,11 +214,14 @@
         'logLines' => $logLines,
     ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE); ?>;
     const statusNode = document.getElementById('ajax-status');
+    const alertsPanel = document.getElementById('alerts-panel');
     const summaryGrid = document.getElementById('summary-grid');
     const activityPanel = document.getElementById('activity-panel');
     const historyPanel = document.getElementById('history-panel');
     const configSummaryPanel = document.getElementById('config-summary-panel');
     const logsPanel = document.getElementById('logs-panel');
+
+    let currentData = initialData;
 
     const setStatus = (message, isError = false) => {
         if (!statusNode) {
@@ -277,6 +302,20 @@
         `).join('');
     };
 
+    const renderAlerts = (alerts) => {
+        if (!alertsPanel) return;
+        if (!Array.isArray(alerts) || !alerts.length) {
+            alertsPanel.innerHTML = '';
+            return;
+        }
+        alertsPanel.innerHTML = alerts.map((alert) => `
+            <article class="alert-card alert-${escapeHtml(alert.severity || 'info')}">
+                <h3>${escapeHtml(alert.title || 'Runtime alert')}</h3>
+                <p>${escapeHtml(alert.message || '')}</p>
+            </article>
+        `).join('');
+    };
+
     const renderSelectedRule = (rule) => {
         if (!isPlainObject(rule) || !rule.id) return '<div class="empty">No selected rule.</div>';
         return renderKvGrid([
@@ -288,11 +327,16 @@
     };
 
 
-    const renderMessageCard = (message) => {
+    const renderMessageCard = (message, mailbox) => {
         const copy = isPlainObject(message.copy) ? message.copy : null;
         const genericDecision = isPlainObject(message.generic_ai_decision) ? message.generic_ai_decision : {};
         const matchingRules = Array.isArray(message.matching_rules) ? message.matching_rules : [];
         const evaluatedRows = Array.isArray(genericDecision.evaluated_no_match_rules) ? genericDecision.evaluated_no_match_rules : [];
+        const availableRules = Array.isArray(mailbox.available_rules) ? mailbox.available_rules : [];
+        const ruleOptions = ['<option value="">No local rule assignment</option>'].concat(availableRules.map((rule) => {
+            const selected = Number(rule.id) === Number(message.selected_rule?.id || 0) ? ' selected' : '';
+            return `<option value="${escapeHtml(rule.id)}"${selected}>#${escapeHtml(rule.id)} · ${escapeHtml(rule.name || 'Rule')} (sort ${escapeHtml(rule.sort_order || 0)})</option>`;
+        })).join('');
         const headerPairs = [
             { label: 'Message-ID', value: message.message_id || '' },
             { label: 'In-Reply-To', value: message.in_reply_to || '' },
@@ -320,7 +364,33 @@
                     </div>
                 </div>
                 ${message.body_excerpt ? `<div class="message-excerpt">${escapeHtml(message.body_excerpt)}</div>` : ''}
-                <div class="message-actions-note">Phase 1 dashboard: readable operator inbox. Manual reply / apply-rule actions are intentionally not wired yet, but this card now exposes the thread and rule data needed for that next step.</div>
+                <div class="message-actions-note">This lightweight operator inbox now supports local rule assignment, styled manual replies, and manual mark-handled actions for messages from the latest saved run.</div>
+                <form class="operator-form" data-manual-form>
+                    <h4>Manual handling</h4>
+                    <input type="hidden" name="mailbox_id" value="${escapeHtml(mailbox.id || 0)}">
+                    <input type="hidden" name="uid" value="${escapeHtml(message.uid || 0)}">
+                    <input type="hidden" name="message_id" value="${escapeHtml(message.message_id || '')}">
+                    <input type="hidden" name="message_key" value="${escapeHtml(message.message_key || '')}">
+                    <div class="operator-grid">
+                        <label>
+                            Assign rule / context
+                            <select name="rule_id">${ruleOptions}</select>
+                        </label>
+                        <label>
+                            Manual reply body
+                            <textarea name="body" placeholder="Write a manual reply here. The assistant will send it with the same styled text/HTML wrapper and original-request summary flow used for automatic replies."></textarea>
+                        </label>
+                    </div>
+                    <label class="operator-note">
+                        Optional internal operator note
+                        <textarea name="note" placeholder="Optional note for manual handled/read action."></textarea>
+                    </label>
+                    <div class="operator-actions">
+                        <button class="btn secondary" type="button" data-manual-action="manual-reply">Send manual reply</button>
+                        <button class="btn mutedbtn" type="button" data-manual-action="manual-mark-handled">Mark handled / read</button>
+                    </div>
+                    <div class="operator-inline-status" data-manual-status></div>
+                </form>
                 <details>
                     <summary>Thread & header diagnostics</summary>
                     ${renderKvGrid(headerPairs)}
@@ -377,7 +447,7 @@
                     ? '<div class="info-note">No saved run has touched this mailbox yet. The dashboard can show that the mailbox exists in Tools config, but it only becomes a readable inbox-style activity view after a dry-run or real polling pass records message results.</div>'
                     : '<div class="info-note">This is the latest saved run for this mailbox. The standalone dashboard is intentionally a lightweight operator inbox, not a live IMAP mail client.</div>'}
                 ${Array.isArray(mailbox.messages) && mailbox.messages.length
-                    ? `<div class="message-list">${mailbox.messages.map(renderMessageCard).join('')}</div>`
+                    ? `<div class="message-list">${mailbox.messages.map((message) => renderMessageCard(message, mailbox)).join('')}</div>`
                     : '<div class="empty">No per-message activity recorded for this mailbox yet.</div>'}
                 ${Array.isArray(mailbox.errors) && mailbox.errors.length ? renderJsonDetails('Mailbox errors', mailbox.errors) : ''}
             </section>
@@ -578,7 +648,9 @@
 
     const applyDashboard = (payload) => {
         const data = isPlainObject(payload) && isPlainObject(payload.data) ? payload.data : (isPlainObject(payload) ? payload : {});
+        currentData = data;
         const ui = getObject(data.ui);
+        renderAlerts(ui.alerts || []);
         renderSummaryGrid(ui.overview || []);
         renderActivity(ui.activity || []);
         renderHistory(ui.history || []);
@@ -611,6 +683,52 @@
         }
         return payload;
     };
+
+    const setManualStatus = (form, message, state) => {
+        const node = form?.querySelector('[data-manual-status]');
+        if (!node) return;
+        node.className = `operator-inline-status active ${state}`;
+        node.textContent = message;
+    };
+
+    if (activityPanel) {
+        activityPanel.addEventListener('click', async (event) => {
+            const button = event.target.closest('[data-manual-action]');
+            if (!button) return;
+
+            const form = button.closest('[data-manual-form]');
+            if (!form) return;
+
+            const action = button.getAttribute('data-manual-action');
+            const body = String(form.querySelector('textarea[name="body"]')?.value || '').trim();
+            if (action === 'manual-reply' && body === '') {
+                setManualStatus(form, 'Write a manual reply before sending.', 'error');
+                return;
+            }
+
+            const formData = new URLSearchParams(new FormData(form));
+            const buttons = Array.from(form.querySelectorAll('button'));
+            buttons.forEach((node) => { node.disabled = true; });
+            setManualStatus(form, action === 'manual-reply' ? 'Sending manual reply…' : 'Marking message handled…', 'pending');
+            setStatus(action === 'manual-reply' ? 'Sending manual reply…' : 'Marking message handled…');
+
+            try {
+                const payload = await request(action, {
+                    method: 'POST',
+                    body: formData.toString(),
+                });
+                applyDashboard(payload.data ?? payload);
+                const successMessage = payload.message || (action === 'manual-reply' ? 'Manual reply sent.' : 'Message marked handled.');
+                setStatus(successMessage);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Manual mail action failed.';
+                setStatus(message, true);
+                setManualStatus(form, message, 'error');
+                buttons.forEach((node) => { node.disabled = false; });
+                return;
+            }
+        });
+    }
 
     document.querySelectorAll('[data-action]').forEach((button) => {
         button.addEventListener('click', async () => {

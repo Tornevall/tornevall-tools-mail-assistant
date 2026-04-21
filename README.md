@@ -69,6 +69,7 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
    - optional dedicated relay token: `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`
    - optional: `MAIL_ASSISTANT_SPAMASSASSIN_SKIP_SCORE` and `MAIL_ASSISTANT_SPAMASSASSIN_COPY_SCORE`
    - optional AI tuning: `MAIL_ASSISTANT_AI_MODEL`, `MAIL_ASSISTANT_AI_FALLBACK_MODEL`, `MAIL_ASSISTANT_AI_REASONING_EFFORT`
+   - optional quota alerting: `MAIL_ASSISTANT_QUOTA_ALERT_EMAIL`, `MAIL_ASSISTANT_QUOTA_ALERT_COOLDOWN_SECONDS`, `MAIL_ASSISTANT_ALERT_FROM_NAME`, `MAIL_ASSISTANT_ALERT_FROM_EMAIL`
    - optional CLI progress mirror: `MAIL_ASSISTANT_CLI_PROGRESS=true|false` (defaults to enabled for CLI so cron/manual runs print live log lines as they work)
    - optional mail transport tuning:
      - `MAIL_ASSISTANT_MAIL_TRANSPORT` (`smtp` | `pickup` | `php_mail` | `custom_mta` | `tools_api`)
@@ -141,7 +142,9 @@ Current UI features:
 - mail-client-style activity cards for the latest run instead of only raw JSON blocks
 - configured mailboxes are now still shown in the activity tab even before any saved run exists, with an explicit note that this is a latest-run operator view and not a live IMAP browser yet
 - expandable per-message diagnostics showing selected rule/no-match decision, thread metadata, and optional saved local headers
+- operator actions directly from latest-run message cards: assign a local rule context, send a manual reply, or mark the message handled/read for manual follow-up
 - human-readable Tools config summary (mailboxes, rule counts, matched rule rows, fallback-rule details, and unmatched AI/IF rows) with raw JSON still available under collapsible advanced sections
+- visible runtime alert cards for AI quota/billing failures plus Tools-side daily AI budget exhaustion/low-budget warnings when available in config
 - optional local message-history summary from `storage/state/message-state.json` when history mode has been requested previously
 - recent local saved message copies are now reused as body/header preview sources when available, so header inspection becomes possible without turning the dashboard into a full IMAP admin surface
 - direct link back to Tools admin
@@ -151,7 +154,7 @@ Current UI features:
 
 - **Cron/manual execution should still use PHP CLI**: `php run ...`
 - The web UI calls the same runner class for manual checks and dry-runs, but it is intended as an operator surface, not as the primary cron transport.
-- The dashboard is now intentionally a lightweight operator inbox, not a full standalone admin clone of Tools or a full live IMAP mail client. Mailbox/rule administration should still happen primarily in Tools, while the local UI focuses on inspection, diagnostics, and future lightweight manual handling.
+- The dashboard is now intentionally a lightweight operator inbox rather than a full standalone admin clone of Tools. Mailbox/rule administration still happens primarily in Tools, but the local UI can now also take care of latest-run messages through manual replies or manual mark-handled/read actions.
 
 ## Cron example
 
@@ -229,12 +232,15 @@ Rules can decide per message whether AI is enabled.
 - The AI is told to ignore outer SpamAssassin wrapper prose when it only forwards the original email, while still using SpamAssassin score/tests as safety hints.
 - Mailbox-level unmatched-mail fallback can now also carry its own `generic_no_match_ai_reasoning_effort` override from Tools config; Tools still decides per selected model whether reasoning is actually forwarded.
 - The config payload from Tools can now also include additive `user.ai_daily_budget` metadata so operators can inspect the effective AI token cap/remaining budget that Mail Support Assistant shares with the SocialGPT reply endpoint.
-- If the fallback path is disabled, unconfigured, rejected as unsafe, invalid, empty, fails, or otherwise does not return a high-confidence allow decision, the message remains ignored.
+- If the fallback path is disabled or unconfigured, the message remains ignored/unread.
+- If the unmatched path is actually evaluated but ends in a terminal reject/error/not-certain outcome, the standalone runner now marks the message seen for manual follow-up so the unread poller does not keep retrying the same no-match decision forever.
+- Quota/billing failures from that unmatched AI path are now promoted into explicit runtime alerts and can also trigger operator alert mail when `MAIL_ASSISTANT_QUOTA_ALERT_EMAIL` is configured.
 
 ## Notes
 
-- Unmatched mail is left untouched.
+- Mail that never enters the unmatched AI/final-fallback path is still left untouched.
 - If a message is skipped because no rule matches or the generic no-match fallback is disabled, unanswerable, or fails, it now stays unread even when `mark_seen_on_skip` is enabled.
+- Exception: when strict unmatched AI/final-fallback evaluation really does run and reaches a terminal reject/error outcome, the message is now marked seen for manual follow-up to stop repeated unmatched retries.
 - Incoming unread mail containing `X-Tornevall-Mail-Assistant: sent` is now skipped before rule matching/reply as an anti-loop guard.
 - Those assistant-marked loop candidates are marked seen after skip to avoid repeated unread reprocessing.
 - If a rule matches but `reply.enabled=false`, the message now also stays unread by default instead of being silently marked seen/moved/deleted as if a reply had actually been sent.

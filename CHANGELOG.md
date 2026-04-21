@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.3.35 - 2026-04-21
+
+- The standalone dashboard now behaves more like a real lightweight operator mail client: latest-run message cards can assign a local rule context, send a manual reply, or mark a message handled/read without waiting for another cron pass.
+- Manual replies now reuse the same outgoing reply pipeline as automatic replies, including the styled HTML/plain-text multipart body and the appended **Summary of your request** excerpt when the selected rule allows it.
+- Terminal unmatched-mail outcomes are no longer left unread forever: when the strict unmatched AI/final fallback path is fully evaluated but still rejects/fails (including quota/billing failures), the runner now marks that message seen for manual follow-up so unread polling does not keep retrying it endlessly.
+- AI quota/billing failures are now promoted into explicit runtime alerts, shown in the standalone dashboard, and can optionally trigger cooldown-limited operator alert mail through `MAIL_ASSISTANT_QUOTA_ALERT_EMAIL`.
+- Added regression coverage in `tests/manual-reply-regression.php` and `tests/quota-alert-regression.php`, and updated `tests/generic-no-match-rows-regression.php` for the new terminal mark-seen behavior.
+
 ## 0.3.34 - 2026-04-21
 
 - An unchecked mailbox `generic_no_match_ai_enabled` checkbox is now treated even more defensively: the standalone runner refuses to materialize any unmatched AI rows at all when that Tools checkbox is off, even if older `generic_no_match_if`, `generic_no_match_instruction`, or `generic_no_match_rules[]` values are still populated.

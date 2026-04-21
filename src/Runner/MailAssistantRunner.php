@@ -21,6 +21,7 @@ class MailAssistantRunner
     private Logger $logger;
     private MessageStateStore $messageState;
     private bool $includeHistory = false;
+    private array $runtimeAlerts = [];
 
     public function __construct(ToolsApiClient $tools, Logger $logger, ?MessageStateStore $messageState = null)
     {
@@ -95,10 +96,113 @@ class MailAssistantRunner
         return $result;
     }
 
+    public function sendManualReply(array $mailbox, array $message, ?array $selectedRule, string $body, array $options = []): array
+    {
+        $body = trim($body);
+        if ($body === '') {
+            throw new RuntimeException('Manual reply body cannot be empty.');
+        }
+
+        $dryRun = !empty($options['dry_run']);
+        $imap = $this->createImapMailboxClient((array) ($mailbox['imap'] ?? []));
+        $subjectPrefix = trim((string) (($options['subject_prefix'] ?? null)
+            ?: (($selectedRule['reply']['subject_prefix'] ?? null) ?: 'Re:')));
+        $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
+        $ruleForReply = is_array($selectedRule) ? $selectedRule : ['reply' => []];
+
+        $replyDelivery = $this->sendReply($mailbox, $ruleForReply, $message, $subject, $body, $dryRun);
+        $finalizeResult = $this->finalizeHandledMessage($imap, $message, $dryRun);
+        $selectedRuleSummary = $this->buildRuleSummaryFromRule($selectedRule);
+        $reason = !empty($finalizeResult['post_handle_warning'])
+            ? 'manual_reply_sent_imap_finalize_failed'
+            : 'manual_reply_sent';
+
+        $this->rememberManualMessageAction($mailbox, $message, 'handled', $reason, $dryRun, [
+            'selected_rule' => $selectedRuleSummary,
+            'matching_rule_count' => $selectedRuleSummary ? 1 : 0,
+            'matching_rules' => $selectedRuleSummary ? [$selectedRuleSummary] : [],
+            'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
+            'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
+            'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
+            'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
+            'reply_excerpt' => $this->buildStateExcerpt($body, 500),
+            'reply_sent' => true,
+            'rule_resolution_source' => $selectedRuleSummary ? 'manual_operator_rule_assignment' : 'manual_operator_reply',
+            'operator_action' => 'manual_reply',
+        ]);
+
+        $this->logger->info('Manual operator reply sent.', [
+            'mailbox' => $mailbox['name'] ?? null,
+            'uid' => $message['uid'] ?? null,
+            'message_id' => $message['message_id'] ?? null,
+            'selected_rule_id' => $selectedRuleSummary['id'] ?? null,
+            'selected_rule_name' => $selectedRuleSummary['name'] ?? null,
+            'transport' => $replyDelivery['transport'] ?? null,
+            'post_handle_action' => $finalizeResult['post_handle_action'] ?? null,
+            'post_handle_warning' => $finalizeResult['post_handle_warning'] ?? null,
+            'dry_run' => $dryRun,
+        ]);
+
+        return [
+            'ok' => true,
+            'action' => 'manual_reply',
+            'reason' => $reason,
+            'selected_rule' => $selectedRuleSummary,
+            'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
+            'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
+            'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
+            'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
+        ];
+    }
+
+    public function markMessageHandledManually(array $mailbox, array $message, ?array $selectedRule, array $options = []): array
+    {
+        $dryRun = !empty($options['dry_run']);
+        $note = trim((string) ($options['note'] ?? ''));
+        $imap = $this->createImapMailboxClient((array) ($mailbox['imap'] ?? []));
+        $finalizeResult = $this->finalizeHandledMessage($imap, $message, $dryRun);
+        $selectedRuleSummary = $this->buildRuleSummaryFromRule($selectedRule);
+        $reason = !empty($finalizeResult['post_handle_warning'])
+            ? 'manual_marked_handled_imap_finalize_failed'
+            : 'manual_marked_handled';
+
+        $this->rememberManualMessageAction($mailbox, $message, 'handled', $reason, $dryRun, [
+            'selected_rule' => $selectedRuleSummary,
+            'matching_rule_count' => $selectedRuleSummary ? 1 : 0,
+            'matching_rules' => $selectedRuleSummary ? [$selectedRuleSummary] : [],
+            'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
+            'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
+            'operator_action' => 'manual_mark_handled',
+            'operator_note' => $note,
+            'rule_resolution_source' => $selectedRuleSummary ? 'manual_operator_rule_assignment' : 'manual_operator_mark_handled',
+        ]);
+
+        $this->logger->info('Message marked handled manually by operator.', [
+            'mailbox' => $mailbox['name'] ?? null,
+            'uid' => $message['uid'] ?? null,
+            'message_id' => $message['message_id'] ?? null,
+            'selected_rule_id' => $selectedRuleSummary['id'] ?? null,
+            'selected_rule_name' => $selectedRuleSummary['name'] ?? null,
+            'post_handle_action' => $finalizeResult['post_handle_action'] ?? null,
+            'post_handle_warning' => $finalizeResult['post_handle_warning'] ?? null,
+            'dry_run' => $dryRun,
+        ]);
+
+        return [
+            'ok' => true,
+            'action' => 'manual_mark_handled',
+            'reason' => $reason,
+            'selected_rule' => $selectedRuleSummary,
+            'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
+            'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
+        ];
+    }
+
     public function run(array $options = []): array
     {
         $dryRun = !empty($options['dry_run']);
         $this->includeHistory = !empty($options['include_history']);
+        $this->runtimeAlerts = [];
         $limitOverride = isset($options['limit']) ? max(1, (int) $options['limit']) : null;
         $mailboxFilter = isset($options['mailbox']) ? (int) $options['mailbox'] : null;
 
@@ -116,6 +220,8 @@ class MailAssistantRunner
             'messages_assistant_sent_skipped' => 0,
             'messages_read_skipped' => 0,
             'spamassassin_copies_saved' => 0,
+            'alerts' => [],
+            'quota_alerts' => [],
             'errors' => [],
             'mailboxes' => [],
         ];
@@ -370,11 +476,14 @@ class MailAssistantRunner
 
                             $mailboxSummary['skipped']++;
                             $summary['messages_skipped']++;
+                                $genericSkipFinalize = $this->buildGenericNoMatchSkipFinalizeResult($imap, $message, $dryRun, $genericNoMatch);
                                 $this->recordMessageState($mailboxSummary, $message, 'ignored', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule'), $dryRun, [
                                     'matching_rule_count' => 0,
                                     'matching_rules' => [],
                                     'selected_rule' => null,
                                     'generic_ai_decision' => (array) ($genericNoMatch['ai_decision'] ?? []),
+                                    'post_handle_action' => (string) ($genericSkipFinalize['post_handle_action'] ?? ''),
+                                    'post_handle_warning' => (string) ($genericSkipFinalize['post_handle_warning'] ?? ''),
                                     'rule_resolution_source' => (string) ($genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match')),
                                     'reused_from_message_id' => (string) ($genericNoMatch['reused_from_message_id'] ?? (($threadReuse['record']['message_id'] ?? null) ?: '')),
                                     'reused_from_reason' => (string) ($genericNoMatch['reused_from_reason'] ?? (($threadReuse['record']['reason'] ?? null) ?: '')),
@@ -384,6 +493,8 @@ class MailAssistantRunner
                                 'matching_rules' => [],
                                 'selected_rule' => null,
                                 'generic_ai_decision' => (array) ($genericNoMatch['ai_decision'] ?? []),
+                                'post_handle_action' => (string) ($genericSkipFinalize['post_handle_action'] ?? ''),
+                                'post_handle_warning' => (string) ($genericSkipFinalize['post_handle_warning'] ?? ''),
                                 'rule_resolution_source' => (string) ($genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match')),
                                 'reused_from_message_id' => (string) ($genericNoMatch['reused_from_message_id'] ?? (($threadReuse['record']['message_id'] ?? null) ?: '')),
                                 'reused_from_reason' => (string) ($genericNoMatch['reused_from_reason'] ?? (($threadReuse['record']['reason'] ?? null) ?: '')),
@@ -405,7 +516,24 @@ class MailAssistantRunner
                                 'generic_no_match_reason' => $genericNoMatch['reason'] ?? null,
                                 'generic_ai_decision' => $genericNoMatch['ai_decision'] ?? null,
                             ]);
-                            if ($this->shouldMarkSeenOnSkip($mailbox, (string) ($genericNoMatch['reason'] ?? '')) && !$dryRun) {
+                            if (!empty($genericSkipFinalize['mark_seen_terminal_no_match'])) {
+                                if (!empty($genericSkipFinalize['post_handle_warning'])) {
+                                    $this->logger->warning('Terminal no-match message was marked read to stop endless retries, but IMAP finalize needs manual attention.', [
+                                        'mailbox' => $mailbox['name'] ?? null,
+                                        'uid' => $message['uid'] ?? null,
+                                        'message_id' => $message['message_id'] ?? null,
+                                        'warning' => $genericSkipFinalize['post_handle_warning'] ?? null,
+                                        'reason' => $genericNoMatch['reason'] ?? null,
+                                    ]);
+                                } else {
+                                    $this->logger->info('Terminal no-match message marked read to stop repeated unmatched AI retries.', [
+                                        'mailbox' => $mailbox['name'] ?? null,
+                                        'uid' => $message['uid'] ?? null,
+                                        'message_id' => $message['message_id'] ?? null,
+                                        'reason' => $genericNoMatch['reason'] ?? null,
+                                    ]);
+                                }
+                            } elseif ($this->shouldMarkSeenOnSkip($mailbox, (string) ($genericNoMatch['reason'] ?? '')) && !$dryRun) {
                                 $imap->markSeen((int) $message['uid']);
                             } else {
                                 $this->preserveUnreadState($imap, $message, $dryRun, 'generic_no_match_preserve_unread');
@@ -569,6 +697,11 @@ class MailAssistantRunner
         if ($this->includeHistory) {
             $summary['message_state'] = $this->messageState->summary();
         }
+
+        $summary['alerts'] = array_values($this->runtimeAlerts);
+        $summary['quota_alerts'] = array_values(array_filter($this->runtimeAlerts, static function (array $alert): bool {
+            return (string) ($alert['type'] ?? '') === 'ai_quota';
+        }));
 
         $this->logger->info('Mail assistant run completed.', [
             'dry_run' => $dryRun,
@@ -930,6 +1063,10 @@ class MailAssistantRunner
                         'no_match_rule_order' => $noMatchRule['sort_order'] ?? null,
                         'error' => $rowError->getMessage(),
                     ]);
+                    $this->maybeHandleAiQuotaIssue($mailbox, $message, 'generic_no_match_row_evaluation', $rowError->getMessage(), [
+                        'no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
+                        'no_match_rule_order' => (int) ($noMatchRule['sort_order'] ?? 0),
+                    ]);
                     continue;
                 }
 
@@ -1027,6 +1164,7 @@ class MailAssistantRunner
                 'message_id' => $message['message_id'] ?? null,
                 'error' => $e->getMessage(),
             ]);
+            $this->maybeHandleAiQuotaIssue($mailbox, $message, 'generic_no_match_fallback', $e->getMessage());
 
             return [
                 'handled' => false,
@@ -1110,6 +1248,10 @@ class MailAssistantRunner
                 'reused_from_message_id' => $threadReuse['record']['message_id'] ?? null,
                 'preferred_no_match_rule_id' => $noMatchRule['id'] ?? null,
                 'error' => $e->getMessage(),
+            ]);
+            $this->maybeHandleAiQuotaIssue($mailbox, $message, 'generic_no_match_thread_continuation', $e->getMessage(), [
+                'no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
+                'no_match_rule_order' => (int) ($noMatchRule['sort_order'] ?? 0),
             ]);
 
             return null;
@@ -1510,6 +1652,10 @@ class MailAssistantRunner
             } catch (Throwable $e) {
                 $lastAiError = trim($e->getMessage());
                 $this->logger->warning('AI reply generation failed, falling back to template.', ['error' => $e->getMessage()]);
+                $this->maybeHandleAiQuotaIssue($mailbox, $message, 'matched_rule_ai_reply', $lastAiError, [
+                    'rule_id' => (int) ($rule['id'] ?? 0),
+                    'rule_name' => (string) ($rule['name'] ?? ''),
+                ]);
             }
         }
 
@@ -1846,6 +1992,309 @@ class MailAssistantRunner
     private function buildStateExcerpt(string $text, int $maxLength = 500): string
     {
         return MimeDecoder::extractRequestSummaryText($text, $maxLength);
+    }
+
+    private function rememberManualMessageAction(array $mailbox, array $message, string $status, string $reason, bool $dryRun, array $extra = []): void
+    {
+        $mailboxId = (int) ($mailbox['id'] ?? 0);
+        $messageKey = $this->resolveMessageKey($message);
+        if ($mailboxId < 1 || $messageKey === '') {
+            return;
+        }
+
+        $record = [
+            'message_id' => (string) ($message['message_id'] ?? ''),
+            'thread_key' => $this->resolveThreadKey($message),
+            'subject_normalized' => (string) (($message['subject_normalized'] ?? null) ?: ''),
+            'in_reply_to' => (string) (($message['in_reply_to'] ?? null) ?: ''),
+            'references' => array_values((array) ($message['references'] ?? [])),
+            'status' => $status,
+            'reason' => $reason,
+            'subject' => (string) ($message['subject'] ?? ''),
+            'from' => (string) ($message['from'] ?? ''),
+            'to' => (string) ($message['to'] ?? ''),
+            'date' => (string) ($message['date'] ?? ''),
+            'uid' => (int) ($message['uid'] ?? 0),
+            'dry_run' => $dryRun,
+            'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
+        ];
+
+        foreach ($extra as $key => $value) {
+            $record[(string) $key] = $value;
+        }
+
+        if (!$dryRun) {
+            $this->messageState->remember($mailboxId, $messageKey, $record);
+        }
+    }
+
+    private function buildRuleSummaryFromRule(?array $rule): ?array
+    {
+        if (!is_array($rule) || (int) ($rule['id'] ?? 0) < 1) {
+            return null;
+        }
+
+        return [
+            'id' => (int) ($rule['id'] ?? 0),
+            'name' => (string) ($rule['name'] ?? ''),
+            'sort_order' => (int) ($rule['sort_order'] ?? 0),
+        ];
+    }
+
+    private function buildGenericNoMatchSkipFinalizeResult(ImapMailboxClient $imap, array $message, bool $dryRun, array $genericNoMatch): array
+    {
+        $reason = strtolower(trim((string) ($genericNoMatch['reason'] ?? '')));
+        $aiDecision = is_array($genericNoMatch['ai_decision'] ?? null) ? $genericNoMatch['ai_decision'] : [];
+        $evaluatedRules = array_values((array) ($aiDecision['evaluated_no_match_rules'] ?? []));
+
+        if (!count($evaluatedRules)) {
+            return [
+                'mark_seen_terminal_no_match' => false,
+                'post_handle_action' => '',
+                'post_handle_warning' => '',
+            ];
+        }
+
+        $terminalReasons = [
+            'no_matching_rule_generic_ai_rejected',
+            'no_matching_rule_generic_ai_invalid_json',
+            'no_matching_rule_generic_ai_not_certain',
+            'no_matching_rule_generic_ai_empty_reply',
+            'no_matching_rule_generic_ai_error',
+        ];
+        if (!in_array($reason, $terminalReasons, true)) {
+            return [
+                'mark_seen_terminal_no_match' => false,
+                'post_handle_action' => '',
+                'post_handle_warning' => '',
+            ];
+        }
+
+        $result = $this->markMessageSeenForManualFollowUp($imap, $message, $dryRun);
+        $result['mark_seen_terminal_no_match'] = true;
+
+        return $result;
+    }
+
+    private function markMessageSeenForManualFollowUp(ImapMailboxClient $imap, array $message, bool $dryRun): array
+    {
+        $uid = (int) ($message['uid'] ?? 0);
+        if ($uid < 1) {
+            return [
+                'post_handle_action' => 'none',
+                'post_handle_warning' => '',
+            ];
+        }
+
+        if ($dryRun) {
+            return [
+                'post_handle_action' => 'dry_run_mark_seen',
+                'post_handle_warning' => '',
+            ];
+        }
+
+        if ($imap->markSeen($uid)) {
+            return [
+                'post_handle_action' => 'mark_seen',
+                'post_handle_warning' => '',
+            ];
+        }
+
+        return [
+            'post_handle_action' => 'mark_seen',
+            'post_handle_warning' => 'The message reached the terminal unmatched/manual-review path, but IMAP could not mark it as seen. It may still come back on the next unread poll.',
+        ];
+    }
+
+    private function maybeHandleAiQuotaIssue(array $mailbox, array $message, string $phase, string $errorMessage, array $extra = []): void
+    {
+        $normalizedError = trim($errorMessage);
+        if (!$this->isAiQuotaErrorMessage($normalizedError)) {
+            return;
+        }
+
+        $alert = [
+            'type' => 'ai_quota',
+            'severity' => 'danger',
+            'phase' => $phase,
+            'mailbox_id' => (int) ($mailbox['id'] ?? 0),
+            'mailbox' => (string) ($mailbox['name'] ?? ''),
+            'uid' => (int) ($message['uid'] ?? 0),
+            'message_id' => (string) ($message['message_id'] ?? ''),
+            'subject' => (string) ($message['subject'] ?? ''),
+            'from' => (string) ($message['from'] ?? ''),
+            'error' => $normalizedError,
+            'detected_at' => date('c'),
+        ];
+        foreach ($extra as $key => $value) {
+            $alert[(string) $key] = $value;
+        }
+
+        $fingerprint = 'ai_quota:' . (int) ($alert['mailbox_id'] ?? 0) . ':' . sha1($phase . '|' . strtolower($normalizedError));
+        foreach ($this->runtimeAlerts as $existingAlert) {
+            if ((string) ($existingAlert['fingerprint'] ?? '') === $fingerprint) {
+                return;
+            }
+        }
+
+        $alert['fingerprint'] = $fingerprint;
+        $this->runtimeAlerts[] = $alert;
+        $this->logger->error('AI quota/billing failure detected for Mail Support Assistant. Operator follow-up is required.', $alert);
+        $this->dispatchQuotaAlertMail($mailbox, $alert);
+    }
+
+    private function isAiQuotaErrorMessage(string $message): bool
+    {
+        $message = strtolower(trim($message));
+        if ($message === '') {
+            return false;
+        }
+
+        return strpos($message, 'insufficient_quota') !== false
+            || strpos($message, 'exceeded your current quota') !== false
+            || strpos($message, 'check your plan and billing details') !== false
+            || (strpos($message, 'quota') !== false && strpos($message, 'rate limit') === false)
+            || strpos($message, 'billing') !== false;
+    }
+
+    protected function dispatchQuotaAlertMail(array $mailbox, array $alert): void
+    {
+        $recipients = array_values(array_filter(array_map('trim', preg_split('/\s*[;,]\s*/', (string) Env::get('MAIL_ASSISTANT_QUOTA_ALERT_EMAIL', '')) ?: [])));
+        if (!count($recipients)) {
+            return;
+        }
+
+        $fingerprint = (string) ($alert['fingerprint'] ?? '');
+        if ($fingerprint === '') {
+            return;
+        }
+
+        $cooldownSeconds = max(60, (int) Env::get('MAIL_ASSISTANT_QUOTA_ALERT_COOLDOWN_SECONDS', '3600'));
+        if (!$this->shouldSendQuotaAlertMail($fingerprint, $cooldownSeconds)) {
+            return;
+        }
+
+        $fromName = trim((string) Env::get('MAIL_ASSISTANT_ALERT_FROM_NAME', (string) (($mailbox['defaults']['from_name'] ?? null) ?: 'Mail Support Assistant')));
+        $fromEmail = trim((string) Env::get('MAIL_ASSISTANT_ALERT_FROM_EMAIL', (string) (($mailbox['defaults']['from_email'] ?? null) ?: Env::get('MAIL_ASSISTANT_SMTP_USERNAME', ''))));
+        if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+            $fromEmail = 'mail-assistant@localhost';
+        }
+
+        $subject = sprintf(
+            '[Mail Assistant] AI quota alert for %s',
+            (string) (($mailbox['name'] ?? null) ?: 'mailbox')
+        );
+        $bodyLines = [
+            'Mail Support Assistant hit an AI quota / billing failure.',
+            '',
+            'Mailbox: ' . (string) ($alert['mailbox'] ?? ''),
+            'Phase: ' . (string) ($alert['phase'] ?? ''),
+            'UID: ' . (($alert['uid'] ?? 0) ? (string) $alert['uid'] : 'n/a'),
+            'Message-ID: ' . (string) ($alert['message_id'] ?? ''),
+            'From: ' . (string) ($alert['from'] ?? ''),
+            'Subject: ' . (string) ($alert['subject'] ?? ''),
+            '',
+            'Error:',
+            (string) ($alert['error'] ?? ''),
+            '',
+            'The standalone runner now also records this as a runtime alert so the dashboard shows it prominently.',
+        ];
+        $bodyText = trim(implode("\n", $bodyLines));
+        $bodyHtml = '<!DOCTYPE html><html lang="en"><body style="font-family:Arial,Helvetica,sans-serif;background:#f8fafc;color:#111827;padding:24px;">'
+            . '<div style="max-width:720px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">'
+            . '<h2 style="margin-top:0;color:#b91c1c;">Mail Support Assistant quota alert</h2>'
+            . '<p>The standalone assistant hit an AI quota / billing failure and may stop handling unmatched or AI-enabled support mail until quota is restored.</p>'
+            . '<pre style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;color:#111827;">'
+            . htmlspecialchars($bodyText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</pre></div></body></html>';
+
+        try {
+            if ($this->tools->hasMailToken()) {
+                $this->tools->sendReplyViaTools([
+                    'mailbox_id' => (int) ($mailbox['id'] ?? 0),
+                    'rule_id' => 0,
+                    'mode' => 'quota_alert',
+                    'to' => $recipients[0],
+                    'cc' => [],
+                    'bcc' => array_slice($recipients, 1),
+                    'from' => $fromName . ' <' . $fromEmail . '>',
+                    'subject' => $subject,
+                    'body' => $bodyText,
+                    'body_html' => $bodyHtml,
+                    'message_meta' => [
+                        'alert_type' => 'ai_quota',
+                        'fingerprint' => $fingerprint,
+                        'mailbox' => (string) ($alert['mailbox'] ?? ''),
+                        'phase' => (string) ($alert['phase'] ?? ''),
+                        'message_id' => (string) ($alert['message_id'] ?? ''),
+                        'uid' => (int) ($alert['uid'] ?? 0),
+                    ],
+                ]);
+            } else {
+                $headers = [
+                    'From: ' . $fromName . ' <' . $fromEmail . '>',
+                    'MIME-Version: 1.0',
+                    'Content-Type: text/plain; charset=UTF-8',
+                ];
+                if (!@mail($recipients[0], $subject, $bodyText, implode("\r\n", $headers))) {
+                    throw new RuntimeException('PHP mail() failed while sending quota alert mail.');
+                }
+            }
+
+            $this->rememberQuotaAlertMailSent($fingerprint);
+            $this->logger->warning('Quota alert mail sent to operator recipients.', [
+                'mailbox' => $alert['mailbox'] ?? null,
+                'phase' => $alert['phase'] ?? null,
+                'recipients' => $recipients,
+                'fingerprint' => $fingerprint,
+            ]);
+        } catch (Throwable $e) {
+            $this->logger->warning('Quota alert mail could not be sent.', [
+                'mailbox' => $alert['mailbox'] ?? null,
+                'phase' => $alert['phase'] ?? null,
+                'recipients' => $recipients,
+                'fingerprint' => $fingerprint,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function shouldSendQuotaAlertMail(string $fingerprint, int $cooldownSeconds): bool
+    {
+        $path = $this->quotaAlertStateFile();
+        $state = [];
+        if (is_readable($path)) {
+            $decoded = json_decode((string) file_get_contents($path), true);
+            if (is_array($decoded)) {
+                $state = $decoded;
+            }
+        }
+
+        $lastSentAt = isset($state[$fingerprint]) ? (int) $state[$fingerprint] : 0;
+
+        return $lastSentAt < (time() - $cooldownSeconds);
+    }
+
+    private function rememberQuotaAlertMailSent(string $fingerprint): void
+    {
+        $path = $this->quotaAlertStateFile();
+        $state = [];
+        if (is_readable($path)) {
+            $decoded = json_decode((string) file_get_contents($path), true);
+            if (is_array($decoded)) {
+                $state = $decoded;
+            }
+        }
+
+        $state[$fingerprint] = time();
+        @file_put_contents($path, json_encode($state, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE));
+    }
+
+    private function quotaAlertStateFile(): string
+    {
+        ProjectPaths::ensureStorage();
+
+        return ProjectPaths::cache() . DIRECTORY_SEPARATOR . 'quota-alert-state.json';
     }
 
     private function resolveThreadKey(array $message): string

@@ -30,6 +30,8 @@ It is expected to:
 - `src/Runner/MailAssistantRunner.php` - orchestration logic
 - `src/Web/WebApp.php` - env-login dashboard
 - `tests/dashboard-config-visibility-regression.php` - verifies the dashboard still shows config-only mailbox cards before any saved run exists and that readable matched-rule / unmatched-row AI fields stay exposed in the config summary
+- `tests/manual-reply-regression.php` - verifies operator-triggered manual replies reuse the same styled reply/transport pipeline and persist the chosen local rule assignment
+- `tests/quota-alert-regression.php` - verifies quota/billing failures become explicit runtime alerts and stop endless unmatched retries by marking the message seen for manual follow-up
 - `src/Support/MessageStateStore.php` - optional local message-history storage under `storage/state/message-state.json` when history mode is requested
 - `tests/generic-no-match-json-regression.php` - strict JSON allow/deny parsing coverage for unmatched-mail AI
   - `tests/generic-no-match-final-fallback-regression.php` - verifies the mailbox-owned last unmatched fallback runs after advanced rows and marks handled messages seen after reply
@@ -61,8 +63,10 @@ It is expected to:
   classes instead of inventing a second execution stack. In many deployments it does not need to be public at all
   because Tools already hosts the real config surface.
 - The standalone dashboard should now prefer a human-readable operator inbox over raw JSON dumps: mailbox/message cards, expandable diagnostics, optional local-header visibility from saved message copies, and lightweight continuity inspection. It is still **not** the place where the full mailbox/rule admin model should be duplicated; keep heavy admin/config in Tools.
+- That operator inbox can now also take care of latest-run mail directly: operators may assign a local rule context, send a manual reply through the same styled outbound pipeline as automatic replies, or mark a message handled/read so the unread poller stops retrying it.
 - The dashboard's activity tab should still list configured mailboxes even before any dry-run/real run has produced message cards, while clearly stating that this surface shows latest-run activity rather than a full live IMAP mail client.
 - The dashboard's config tab should keep readable matched-rule rows, fallback-rule details, and unmatched AI/IF rows visible so operators do not have to reverse-engineer the raw JSON to understand what Tools actually sent to the standalone runner.
+- Runtime alert banners should stay prominent for AI quota/billing failures and Tools-side daily AI budget exhaustion/low-budget states when that metadata is present in config or the latest run summary.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is
   limited to `.env`, sessions, logs, last-run summaries, and optional message copies in `storage/`.
 - Handled or explicitly ignored mail may still be recorded locally by normalized `Message-Id`, but only when history
@@ -94,7 +98,7 @@ It is expected to:
 - Real mailbox work requires `ext-imap`.
 - Missing `ext-imap` must fail clearly instead of crashing unclearly.
 - Dry-run must never send replies or mutate mailboxes.
-- No-match mails must stay untouched.
+- No-match mails that never enter strict unmatched AI evaluation should stay untouched/unread, but terminal unmatched reject/error outcomes after actual evaluation may now be marked seen for manual follow-up so the unread poller stops retrying them forever.
 - The same personal token is used both to fetch config and, when enabled, to call Tools-hosted AI.
 - For matched rules with `ai_enabled=true`, the standalone client must treat the rule's responder/persona/custom instruction/model/reasoning values as authoritative AI override inputs for that single Tools AI request.
 - If a matched rule instruction explicitly requires a language such as English, the standalone client should convert that
@@ -116,6 +120,8 @@ It is expected to:
 - If that checkbox is off, the standalone runner should not even materialize/evaluate advanced unmatched rows or the mailbox-level last fallback, even when those text fields still contain older saved values.
 - Ordered `generic_no_match_rules[]` rows are still the advanced unmatched checks, but the mailbox-owned `generic_no_match_if` / `generic_no_match_instruction` pair is now the strict last unmatched fallback after those rows.
 - If that strict last unmatched fallback actually sends a reply, the runner should finalize the message by marking it seen immediately so the next unread poll does not handle it again.
+- If the strict unmatched AI/final-fallback path is fully evaluated but still ends in a terminal reject/error/not-certain outcome, the runner should now also mark the message seen for manual follow-up so the same unread mail does not chew through AI forever.
+- Quota/billing failures from AI-enabled or unmatched-mail AI flows should now be promoted into explicit runtime alerts, and optional operator alert mail should be rate-limited/cooldown-based rather than spamming once per row.
 - Unmatched fallback rows must continue in `sort_order` even if one row is rejected or hits a row-local AI/API evaluation failure; only a real sent reply should stop that unmatched-row loop early.
 - Generic unmatched AI request context should now expose which unmatched path triggered the request (`advanced_row_rule` vs `mailbox_final_fallback`) so upstream SocialGPT/OpenAI audit logs can be mapped back to the real standalone fallback source.
 - Outer SpamAssassin wrapper prose may be ignored for unmatched-mail AI classification, but SpamAssassin score/tests should still be available as safety/risk hints.
@@ -156,6 +162,8 @@ php -l src/Mail/MimeDecoder.php
 php -l src/Support/MessageStateStore.php
 php -l src/Runner/MailAssistantRunner.php
 php -l src/Web/WebApp.php
+php -l tests/manual-reply-regression.php
+php -l tests/quota-alert-regression.php
 php run --help
 php run --self-test
 ```

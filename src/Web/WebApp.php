@@ -90,6 +90,7 @@ class WebApp
             'logLines' => $logLines,
             'messageCopies' => $messageCopies,
             'ui' => [
+                'alerts' => $this->buildAlertSummary($config, $lastRun),
                 'overview' => $this->buildOverviewSummary($config, $configError, $lastRun, $messageState, $messageCopies),
                 'activity' => $this->buildLastRunMailboxCards($lastRun, $messageCopies, $config),
                 'history' => $this->buildHistoryMailboxCards($messageState),
@@ -155,7 +156,65 @@ class WebApp
                 'note' => 'Recent local cached copies with optional headers/body preview.',
                 'tone' => 'muted',
             ],
+            [
+                'label' => 'Quota alerts',
+                'value' => count((array) ($lastRun['quota_alerts'] ?? [])),
+                'note' => 'Latest run quota/billing warnings that need operator attention.',
+                'tone' => count((array) ($lastRun['quota_alerts'] ?? [])) > 0 ? 'danger' : 'muted',
+            ],
         ];
+    }
+
+    private function buildAlertSummary(array $config, array $lastRun): array
+    {
+        $alerts = [];
+        $budget = is_array($config['user']['ai_daily_budget'] ?? null) ? $config['user']['ai_daily_budget'] : [];
+        if ($budget) {
+            $isUnlimited = !empty($budget['is_unlimited']);
+            $remaining = $budget['remaining'] ?? null;
+            $cap = $budget['cap'] ?? null;
+            if (!$isUnlimited && $remaining !== null) {
+                $remaining = (int) $remaining;
+                $cap = $cap !== null ? (int) $cap : null;
+                if ($remaining <= 0) {
+                    $alerts[] = [
+                        'severity' => 'danger',
+                        'title' => 'Daily AI budget exhausted',
+                        'message' => 'The Tools-side daily AI budget for this token owner is at zero remaining. New AI-powered replies or unmatched AI triage may stop until the budget resets or is raised.',
+                        'source' => 'tools_ai_daily_budget',
+                    ];
+                } elseif ($cap !== null && $cap > 0 && $remaining <= max(250, (int) floor($cap * 0.1))) {
+                    $alerts[] = [
+                        'severity' => 'warning',
+                        'title' => 'Daily AI budget running low',
+                        'message' => 'Only ' . $remaining . ' daily AI units remain for this token owner, so AI-enabled mail flows may stop later today.',
+                        'source' => 'tools_ai_daily_budget',
+                    ];
+                }
+            }
+        }
+
+        foreach ((array) ($lastRun['alerts'] ?? []) as $alert) {
+            if (!is_array($alert)) {
+                continue;
+            }
+
+            $alerts[] = [
+                'severity' => (string) (($alert['severity'] ?? null) ?: 'warning'),
+                'title' => (string) (($alert['type'] ?? null) === 'ai_quota'
+                    ? 'AI quota / billing failure detected'
+                    : (($alert['title'] ?? null) ?: 'Runtime alert')),
+                'message' => trim(implode(' ', array_filter([
+                    (string) (($alert['mailbox'] ?? null) ? ('Mailbox: ' . $alert['mailbox'] . '.') : ''),
+                    (string) (($alert['subject'] ?? null) ? ('Subject: ' . $alert['subject'] . '.') : ''),
+                    (string) (($alert['error'] ?? null) ?: ''),
+                ]))),
+                'source' => (string) (($alert['type'] ?? null) ?: 'runtime_alert'),
+                'meta' => $alert,
+            ];
+        }
+
+        return $alerts;
     }
 
     private function buildLastRunMailboxCards(array $lastRun, array $messageCopies, array $config = []): array
@@ -228,6 +287,15 @@ class WebApp
                     'folder' => (string) (($configuredMailbox['imap']['folder'] ?? null) ?: 'INBOX'),
                     'encryption' => (string) (($configuredMailbox['imap']['encryption'] ?? null) ?: ''),
                 ],
+                'available_rules' => array_values(array_map(function (array $rule): array {
+                    return [
+                        'id' => (int) ($rule['id'] ?? 0),
+                        'name' => (string) ($rule['name'] ?? ''),
+                        'sort_order' => (int) ($rule['sort_order'] ?? 0),
+                    ];
+                }, array_values(array_filter((array) ($configuredMailbox['rules'] ?? []), static function ($rule): bool {
+                    return is_array($rule) && (int) ($rule['id'] ?? 0) > 0;
+                })))),
                 'source' => 'last_run',
                 'messages' => $messages,
                 'errors' => array_values((array) ($mailbox['errors'] ?? [])),
@@ -262,6 +330,15 @@ class WebApp
                     'folder' => (string) (($configuredMailbox['imap']['folder'] ?? null) ?: 'INBOX'),
                     'encryption' => (string) (($configuredMailbox['imap']['encryption'] ?? null) ?: ''),
                 ],
+                'available_rules' => array_values(array_map(function (array $rule): array {
+                    return [
+                        'id' => (int) ($rule['id'] ?? 0),
+                        'name' => (string) ($rule['name'] ?? ''),
+                        'sort_order' => (int) ($rule['sort_order'] ?? 0),
+                    ];
+                }, array_values(array_filter((array) ($configuredMailbox['rules'] ?? []), static function ($rule): bool {
+                    return is_array($rule) && (int) ($rule['id'] ?? 0) > 0;
+                })))),
                 'source' => 'config_only',
                 'messages' => [],
                 'errors' => [],
@@ -534,6 +611,188 @@ class WebApp
         return $text;
     }
 
+    private function resolveActiveConfig(): array
+    {
+        if (!$this->tools->hasToken()) {
+            throw new \RuntimeException('MAIL_ASSISTANT_TOOLS_TOKEN is not configured yet.');
+        }
+
+        return $this->tools->fetchConfig();
+    }
+
+    private function findConfiguredMailbox(array $config, int $mailboxId): array
+    {
+        foreach ((array) ($config['mailboxes'] ?? []) as $mailbox) {
+            if (is_array($mailbox) && (int) ($mailbox['id'] ?? 0) === $mailboxId) {
+                return $mailbox;
+            }
+        }
+
+        throw new \RuntimeException('Mailbox not found in the current Tools config payload.');
+    }
+
+    private function findConfiguredRule(array $mailbox, int $ruleId): ?array
+    {
+        if ($ruleId < 1) {
+            return null;
+        }
+
+        foreach ((array) ($mailbox['rules'] ?? []) as $rule) {
+            if (is_array($rule) && (int) ($rule['id'] ?? 0) === $ruleId) {
+                return $rule;
+            }
+        }
+
+        throw new \RuntimeException('Selected rule no longer exists in the current Tools config payload.');
+    }
+
+    private function resolveOperatorMessageContext(int $mailboxId, int $uid, string $messageId, string $messageKey = ''): array
+    {
+        $lastRun = $this->logger->lastRun();
+        $copyIndex = $this->indexMessageCopies($this->loadRecentMessageCopies(60));
+
+        foreach ((array) ($lastRun['mailboxes'] ?? []) as $mailbox) {
+            if (!is_array($mailbox) || (int) ($mailbox['id'] ?? 0) !== $mailboxId) {
+                continue;
+            }
+
+            foreach ((array) ($mailbox['message_results'] ?? []) as $message) {
+                if (!is_array($message)) {
+                    continue;
+                }
+
+                $matches = ($uid > 0 && (int) ($message['uid'] ?? 0) === $uid)
+                    || ($messageId !== '' && strcasecmp((string) ($message['message_id'] ?? ''), $messageId) === 0)
+                    || ($messageKey !== '' && strcasecmp((string) ($message['message_key'] ?? ''), $messageKey) === 0);
+                if (!$matches) {
+                    continue;
+                }
+
+                $copy = $this->findMessageCopyForResult($message, $copyIndex);
+                $copyPayload = $this->loadFullMessageCopy($copy);
+                $copyMessage = is_array($copyPayload['message'] ?? null) ? $copyPayload['message'] : [];
+
+                return [
+                    'uid' => (int) ($message['uid'] ?? 0),
+                    'message_id' => (string) ($message['message_id'] ?? ''),
+                    'message_key' => (string) ($message['message_key'] ?? ''),
+                    'thread_key' => (string) ($message['thread_key'] ?? ''),
+                    'in_reply_to' => (string) ($message['in_reply_to'] ?? ''),
+                    'references' => array_values((array) ($message['references'] ?? [])),
+                    'subject' => (string) ($message['subject'] ?? ''),
+                    'subject_normalized' => (string) (($message['subject_normalized'] ?? null) ?: ''),
+                    'from' => (string) ($message['from'] ?? ''),
+                    'to' => (string) ($message['to'] ?? ''),
+                    'date' => (string) ($message['date'] ?? ''),
+                    'body_text' => (string) (($copyMessage['body_text'] ?? null) ?: (($message['body_excerpt'] ?? null) ?: '')),
+                    'body_text_reply_aware' => (string) (($copyMessage['body_text_reply_aware'] ?? null) ?: (($copyMessage['body_text'] ?? null) ?: (($message['body_excerpt'] ?? null) ?: ''))),
+                    'body_text_raw' => (string) (($copyMessage['body_text_raw'] ?? null) ?: ''),
+                    'headers_map' => is_array($copyMessage['headers_map'] ?? null) ? $copyMessage['headers_map'] : [],
+                    'headers_raw' => (string) (($copyMessage['headers_raw'] ?? null) ?: ''),
+                    'copy' => $copy,
+                ];
+            }
+        }
+
+        throw new \RuntimeException('The selected message is no longer present in the latest saved run summary. Refresh the dashboard and try again.');
+    }
+
+    private function loadFullMessageCopy(?array $copy): array
+    {
+        $path = is_array($copy) ? (string) ($copy['path'] ?? '') : '';
+        if ($path === '' || !is_readable($path)) {
+            return [];
+        }
+
+        $decoded = json_decode((string) file_get_contents($path), true);
+
+        return is_array($decoded) ? $decoded : [];
+    }
+
+    private function persistOperatorActionIntoLastRun(int $mailboxId, array $messageIdentity, array $actionResult): void
+    {
+        $lastRun = $this->logger->lastRun();
+        if (!$lastRun) {
+            return;
+        }
+
+        foreach ((array) ($lastRun['mailboxes'] ?? []) as $mailboxIndex => $mailbox) {
+            if (!is_array($mailbox) || (int) ($mailbox['id'] ?? 0) !== $mailboxId) {
+                continue;
+            }
+
+            foreach ((array) ($mailbox['message_results'] ?? []) as $messageIndex => $message) {
+                if (!is_array($message)) {
+                    continue;
+                }
+
+                $matches = ((int) ($message['uid'] ?? 0) > 0 && (int) ($message['uid'] ?? 0) === (int) ($messageIdentity['uid'] ?? 0))
+                    || ((string) ($message['message_id'] ?? '') !== '' && strcasecmp((string) ($message['message_id'] ?? ''), (string) ($messageIdentity['message_id'] ?? '')) === 0)
+                    || ((string) ($message['message_key'] ?? '') !== '' && strcasecmp((string) ($message['message_key'] ?? ''), (string) ($messageIdentity['message_key'] ?? '')) === 0);
+                if (!$matches) {
+                    continue;
+                }
+
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['outcome'] = !empty($actionResult['post_handle_warning']) ? 'warning' : 'handled';
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['reason'] = (string) ($actionResult['reason'] ?? 'manual_operator_action');
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['selected_rule'] = $actionResult['selected_rule'] ?? null;
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['matching_rule_count'] = !empty($actionResult['selected_rule']) ? 1 : 0;
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['matching_rules'] = !empty($actionResult['selected_rule']) ? [$actionResult['selected_rule']] : [];
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['reply_message_id'] = (string) ($actionResult['reply_message_id'] ?? '');
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['reply_transport'] = (string) ($actionResult['reply_transport'] ?? '');
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['post_handle_action'] = (string) ($actionResult['post_handle_action'] ?? '');
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['post_handle_warning'] = (string) ($actionResult['post_handle_warning'] ?? '');
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['rule_resolution_source'] = !empty($actionResult['selected_rule'])
+                    ? 'manual_operator_rule_assignment'
+                    : 'manual_operator_action';
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['operator_action'] = (string) ($actionResult['action'] ?? 'manual_operator_action');
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['operator_action_at'] = date('c');
+                $this->recalculateLastRunCounters($lastRun);
+                $this->logger->saveLastRun($lastRun);
+
+                return;
+            }
+        }
+    }
+
+    private function recalculateLastRunCounters(array &$lastRun): void
+    {
+        $lastRun['messages_scanned'] = 0;
+        $lastRun['messages_handled'] = 0;
+        $lastRun['messages_skipped'] = 0;
+        $lastRun['messages_failed'] = 0;
+
+        foreach ((array) ($lastRun['mailboxes'] ?? []) as $mailboxIndex => $mailbox) {
+            if (!is_array($mailbox)) {
+                continue;
+            }
+
+            $handled = 0;
+            $skipped = 0;
+            $failed = 0;
+            $scanned = count((array) ($mailbox['message_results'] ?? []));
+            foreach ((array) ($mailbox['message_results'] ?? []) as $message) {
+                $outcome = strtolower(trim((string) ($message['outcome'] ?? '')));
+                if (in_array($outcome, ['handled', 'warning'], true)) {
+                    $handled++;
+                } elseif ($outcome === 'error') {
+                    $failed++;
+                } else {
+                    $skipped++;
+                }
+            }
+
+            $lastRun['mailboxes'][$mailboxIndex]['scanned'] = $scanned;
+            $lastRun['mailboxes'][$mailboxIndex]['handled'] = $handled;
+            $lastRun['mailboxes'][$mailboxIndex]['skipped'] = $skipped;
+            $lastRun['mailboxes'][$mailboxIndex]['failed'] = $failed;
+            $lastRun['messages_scanned'] += $scanned;
+            $lastRun['messages_handled'] += $handled;
+            $lastRun['messages_skipped'] += $skipped;
+            $lastRun['messages_failed'] += $failed;
+        }
+    }
+
     private function handleAjax(string $method): void
     {
         $action = strtolower($this->requestParam('ajax', 'dashboard'));
@@ -595,6 +854,67 @@ class WebApp
                     'result' => $result,
                     'data' => $this->buildDashboardPayload(),
                 ], !empty($result['ok']) ? 200 : 500);
+            }
+
+            if ($action === 'manual-reply') {
+                if ($method !== 'POST') {
+                    $this->json(['ok' => false, 'message' => 'POST required.'], 405);
+                }
+
+                $mailboxId = (int) $this->requestParam('mailbox_id');
+                $uid = (int) $this->requestParam('uid');
+                $messageId = $this->requestParam('message_id');
+                $messageKey = $this->requestParam('message_key');
+                $ruleId = (int) $this->requestParam('rule_id');
+                $body = $this->requestParam('body');
+                if ($mailboxId < 1 || $uid < 1 || trim($body) === '') {
+                    $this->json(['ok' => false, 'message' => 'Mailbox, UID, and manual reply body are required.'], 422);
+                }
+
+                $config = $this->resolveActiveConfig();
+                $mailbox = $this->findConfiguredMailbox($config, $mailboxId);
+                $rule = $this->findConfiguredRule($mailbox, $ruleId);
+                $message = $this->resolveOperatorMessageContext($mailboxId, $uid, $messageId, $messageKey);
+                $result = $this->runner->sendManualReply($mailbox, $message, $rule, $body);
+                $this->persistOperatorActionIntoLastRun($mailboxId, $message, $result);
+
+                $this->json([
+                    'ok' => true,
+                    'message' => 'Manual reply sent and styled with the same reply pipeline as automatic replies.',
+                    'result' => $result,
+                    'data' => $this->buildDashboardPayload(),
+                ]);
+            }
+
+            if ($action === 'manual-mark-handled') {
+                if ($method !== 'POST') {
+                    $this->json(['ok' => false, 'message' => 'POST required.'], 405);
+                }
+
+                $mailboxId = (int) $this->requestParam('mailbox_id');
+                $uid = (int) $this->requestParam('uid');
+                $messageId = $this->requestParam('message_id');
+                $messageKey = $this->requestParam('message_key');
+                $ruleId = (int) $this->requestParam('rule_id');
+                if ($mailboxId < 1 || $uid < 1) {
+                    $this->json(['ok' => false, 'message' => 'Mailbox and UID are required.'], 422);
+                }
+
+                $config = $this->resolveActiveConfig();
+                $mailbox = $this->findConfiguredMailbox($config, $mailboxId);
+                $rule = $this->findConfiguredRule($mailbox, $ruleId);
+                $message = $this->resolveOperatorMessageContext($mailboxId, $uid, $messageId, $messageKey);
+                $result = $this->runner->markMessageHandledManually($mailbox, $message, $rule, [
+                    'note' => $this->requestParam('note'),
+                ]);
+                $this->persistOperatorActionIntoLastRun($mailboxId, $message, $result);
+
+                $this->json([
+                    'ok' => true,
+                    'message' => 'Message marked handled/read for manual follow-up so the unread poller stops retrying it.',
+                    'result' => $result,
+                    'data' => $this->buildDashboardPayload(),
+                ]);
             }
 
             $this->json(['ok' => false, 'message' => 'Unknown ajax action.'], 404);

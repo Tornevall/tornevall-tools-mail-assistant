@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## 0.3.40 - 2026-04-21
+
+- The standalone runner now refreshes one stable local message copy for every scanned mail, so the dashboard/manual handling flow keeps the actual body text visible instead of too easily falling back to empty/latest-run-only excerpts.
+- The dashboard activity cards now prefer a larger body preview, and live unread IMAP previews also expose more of the incoming message content directly.
+- Tools/API sync for standalone cases now sends additive full inbound/outbound body fields plus source-instance metadata, so `/admin/mail-support-assistant/cases/{id}` can show a more centralized conversation history even when the cronjob ran on another server.
+- Added env-driven TLS override support for both standalone Tools API calls (`MAIL_ASSISTANT_TOOLS_SSL_VERIFY`, `MAIL_ASSISTANT_TOOLS_CA_BUNDLE`) and direct SMTP (`MAIL_ASSISTANT_SMTP_SSL_VERIFY`, `MAIL_ASSISTANT_SMTP_CA_FILE`) to make WSL/self-signed certificate setups easier to unblock.
+
 ## 0.3.39 - 2026-04-21
 
 - The standalone assistant can now sync processed unread-mail outcomes back into Tools as threaded support cases, so the same conversation can be reopened from Tools admin instead of living only inside one local `last-run.json` snapshot.

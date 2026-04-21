@@ -76,6 +76,7 @@ It is expected to:
 - The dashboard's activity tab should still list configured mailboxes even before any dry-run/real run has produced message cards, while clearly stating that this surface shows latest-run activity rather than a full live IMAP mail client.
 - The standalone dashboard may now also merge a lightweight live unread IMAP preview into that activity tab, so operators can act on fresh unread mail even before another saved run exists.
 - The standalone runtime can now sync processed inbox outcomes back into Tools as threaded support cases, and outgoing replies may append a public case-tracking link for the recipient when that Tools sync succeeds in time.
+- That centralized Tools case history can now also carry full inbound/outbound body content plus source-instance metadata, so shared operator review still works when the cronjob runs on a different server.
 - Optional operator reporting for unanswered messages is now env-controlled (`MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED` / `MAIL_ASSISTANT_UNANSWERED_REPORT_TO`) and should summarize skipped/error/no-reply items after a run without interrupting the run itself when the report mail fails.
 - CLI/dry-run runs must now refuse to start when another process already holds the same assistant instance's local run lock; overlapping cron invocations should skip cleanly instead of double-processing unread mail.
 - `cron-run.sh` should also block overlapping wrapper-level cron starts before PHP begins, using a PID-aware shell lock with stale-lock cleanup so operators can see which process currently owns the cron wrapper lock.
@@ -83,6 +84,7 @@ It is expected to:
 - Runtime alert banners should stay prominent for AI quota/billing failures and Tools-side daily AI budget exhaustion/low-budget states when that metadata is present in config or the latest run summary.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is
   limited to `.env`, sessions, logs, last-run summaries, and optional message copies in `storage/`.
+- The runner should refresh one stable local message copy per scanned mail so the dashboard/manual handling flow keeps a readable body preview even when the latest-run summary itself only stores shorter excerpts.
 - Handled or explicitly ignored mail may still be recorded locally by normalized `Message-Id`, but only when history
   mode is explicitly requested (for example `php run --include-history`).
 - That history is diagnostic only and must never block later re-evaluation of mail that is still unread in IMAP.
@@ -115,6 +117,7 @@ It is expected to:
 - Real mailbox work requires `ext-imap`.
 - Missing `ext-imap` must fail clearly instead of crashing unclearly.
 - Dry-run must never send replies or mutate mailboxes.
+- Tools API and SMTP TLS verification may now be overridden separately through `.env` (`MAIL_ASSISTANT_TOOLS_SSL_VERIFY` / `MAIL_ASSISTANT_TOOLS_CA_BUNDLE`, `MAIL_ASSISTANT_SMTP_SSL_VERIFY` / `MAIL_ASSISTANT_SMTP_CA_FILE`) for WSL/self-signed recovery cases, but verification should remain on by default.
 - No-match mails that never enter strict unmatched AI evaluation should stay untouched/unread, but terminal unmatched reject/error outcomes after actual evaluation may now be marked seen for manual follow-up so the unread poller stops retrying them forever.
 - The same personal token is used both to fetch config and, when enabled, to call Tools-hosted AI.
 - For matched rules with `ai_enabled=true`, the standalone client must treat the rule's responder/persona/custom instruction/model/reasoning values as authoritative AI override inputs for that single Tools AI request.

@@ -132,6 +132,8 @@ class MailAssistantRunner
             'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
             'reply_issue_id' => (string) ($replyDelivery['reply_issue_id'] ?? ''),
             'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
+            'reply_text' => (string) ($replyDelivery['reply_text'] ?? $body),
+            'reply_html' => (string) ($replyDelivery['reply_html'] ?? ''),
             'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
             'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
             'reply_excerpt' => $this->buildStateExcerpt($body, 500),
@@ -314,6 +316,8 @@ class MailAssistantRunner
                             'subject' => $message['subject'] ?? null,
                             'from' => $message['from'] ?? null,
                         ]);
+
+                        $this->saveMessageCopy($mailbox, $message, 'latest-run-message');
 
                         if (!empty($message['is_seen'])) {
                             $mailboxSummary['skipped']++;
@@ -1007,6 +1011,7 @@ class MailAssistantRunner
                 'outcome' => 'pending',
                 'reason' => 'live_inbox_unread',
                 'reason_label' => 'Unread live inbox preview',
+                'body_preview' => $this->buildStateMessageBodyPreview($message, 1800),
                 'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
                 'selected_rule' => null,
                 'matching_rule_count' => 0,
@@ -1234,6 +1239,8 @@ class MailAssistantRunner
                     'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
                     'reply_issue_id' => (string) ($replyDelivery['reply_issue_id'] ?? ''),
                     'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
+                    'reply_text' => (string) ($replyDelivery['reply_text'] ?? $replyText),
+                    'reply_html' => (string) ($replyDelivery['reply_html'] ?? ''),
                     'rule_resolution_source' => (string) (($threadReuse['source'] ?? null) ?: 'generic_no_match'),
                     'reused_from_message_id' => (string) (($threadReuse['record']['message_id'] ?? null) ?: ''),
                     'reused_from_reason' => (string) (($threadReuse['record']['reason'] ?? null) ?: ''),
@@ -1411,6 +1418,8 @@ class MailAssistantRunner
             'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
             'reply_issue_id' => (string) ($replyDelivery['reply_issue_id'] ?? ''),
             'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
+            'reply_text' => (string) ($replyDelivery['reply_text'] ?? $replyText),
+            'reply_html' => (string) ($replyDelivery['reply_html'] ?? ''),
             'rule_resolution_source' => (string) (($threadReuse['source'] ?? null) ?: 'generic_no_match'),
             'reused_from_message_id' => (string) (($threadReuse['record']['message_id'] ?? null) ?: ''),
             'reused_from_reason' => (string) (($threadReuse['record']['reason'] ?? null) ?: ''),
@@ -1631,6 +1640,8 @@ class MailAssistantRunner
             $finalizeResult['reply_message_id'] = (string) ($replyDelivery['reply_message_id'] ?? '');
             $finalizeResult['reply_issue_id'] = (string) ($replyDelivery['reply_issue_id'] ?? '');
             $finalizeResult['reply_transport'] = (string) ($replyDelivery['transport'] ?? '');
+            $finalizeResult['reply_text'] = (string) ($replyDelivery['reply_text'] ?? $replyText);
+            $finalizeResult['reply_html'] = (string) ($replyDelivery['reply_html'] ?? '');
         }
 
         return $finalizeResult;
@@ -1945,12 +1956,22 @@ class MailAssistantRunner
         $mailboxId = (int) ($mailbox['id'] ?? 0);
         $uid = (int) ($message['uid'] ?? 0);
         $safeReason = preg_replace('/[^a-z0-9_-]+/i', '-', strtolower(trim($reason))) ?: 'message-copy';
+        $messageSignature = $this->resolveMessageKey($message);
+        if ($messageSignature === '') {
+            $messageSignature = implode('|', [
+                (string) ($message['message_id'] ?? ''),
+                (string) ($message['subject'] ?? ''),
+                (string) ($message['from'] ?? ''),
+                (string) ($message['to'] ?? ''),
+                (string) ($message['date'] ?? ''),
+                (string) $uid,
+            ]);
+        }
         $filename = sprintf(
-            '%s%s%s-%s-mailbox-%d-uid-%d.json',
+            '%s%smessage-%s-mailbox-%d-uid-%d.json',
             ProjectPaths::messageCopies(),
             DIRECTORY_SEPARATOR,
-            date('Ymd-His'),
-            $safeReason,
+            substr(sha1($messageSignature), 0, 20),
             $mailboxId,
             $uid
         );
@@ -1976,6 +1997,7 @@ class MailAssistantRunner
                 'body_text' => $message['body_text'] ?? '',
                 'body_text_reply_aware' => $message['body_text_reply_aware'] ?? '',
                 'body_html' => $message['body_html'] ?? '',
+                'body_preview' => $this->buildStateMessageBodyPreview($message, 2400),
                 'spam_assassin' => $message['spam_assassin'] ?? [],
             ],
         ];
@@ -2023,6 +2045,7 @@ class MailAssistantRunner
             'date' => (string) ($message['date'] ?? ''),
             'uid' => (int) ($message['uid'] ?? 0),
             'dry_run' => $dryRun,
+            'body_preview' => $this->buildStateMessageBodyPreview($message, 1800),
             'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
         ];
         foreach ($extra as $key => $value) {
@@ -2080,6 +2103,18 @@ class MailAssistantRunner
             $excerpt = $this->buildStateExcerpt($candidate, 500);
             if ($excerpt !== '') {
                 return $excerpt;
+            }
+        }
+
+        return '';
+    }
+
+    private function buildStateMessageBodyPreview(array $message, int $maxLength = 1800): string
+    {
+        foreach ($this->getMessageBodyCandidates($message) as $candidate) {
+            $preview = $this->buildStateExcerpt($candidate, $maxLength);
+            if ($preview !== '') {
+                return $preview;
             }
         }
 
@@ -2149,6 +2184,7 @@ class MailAssistantRunner
             'date' => (string) ($message['date'] ?? ''),
             'uid' => (int) ($message['uid'] ?? 0),
             'dry_run' => $dryRun,
+            'body_preview' => $this->buildStateMessageBodyPreview($message, 1800),
             'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
         ];
 
@@ -2196,11 +2232,16 @@ class MailAssistantRunner
             'date' => (string) ($message['date'] ?? ''),
             'status' => $status,
             'reason' => $reason,
+            'body_text' => (string) (($message['body_text'] ?? null) ?: ''),
+            'body_text_reply_aware' => (string) (($message['body_text_reply_aware'] ?? null) ?: (($message['body_text'] ?? null) ?: '')),
+            'body_html' => (string) (($message['body_html'] ?? null) ?: ''),
             'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
+            'reply_body_text' => (string) ($extra['reply_text'] ?? ''),
+            'reply_body_html' => (string) ($extra['reply_html'] ?? ''),
             'reply_excerpt' => (string) ($extra['reply_excerpt'] ?? ''),
             'selected_rule_id' => (int) (($selectedRule['id'] ?? null) ?: ($extra['selected_rule_id'] ?? 0)),
             'selected_rule_name' => (string) (($selectedRule['name'] ?? null) ?: ($extra['selected_rule_name'] ?? '')),
-            'meta' => [
+            'meta' => $this->buildSupportCaseSyncMeta([
                 'reply_transport' => (string) ($extra['reply_transport'] ?? ''),
                 'post_handle_action' => (string) ($extra['post_handle_action'] ?? ''),
                 'post_handle_warning' => (string) ($extra['post_handle_warning'] ?? ''),
@@ -2212,7 +2253,7 @@ class MailAssistantRunner
                 'reused_from_reason' => (string) ($extra['reused_from_reason'] ?? ''),
                 'reply_sent' => !empty($extra['reply_sent']),
                 'error' => (string) ($extra['error'] ?? ''),
-            ],
+            ]),
         ];
 
         try {
@@ -2240,6 +2281,21 @@ class MailAssistantRunner
             'name' => (string) ($rule['name'] ?? ''),
             'sort_order' => (int) ($rule['sort_order'] ?? 0),
         ];
+    }
+
+    private function buildSupportCaseSyncMeta(array $meta = []): array
+    {
+        $host = trim((string) php_uname('n'));
+        $instance = trim((string) Env::get('MAIL_ASSISTANT_INSTANCE_NAME', ''));
+        if ($instance === '') {
+            $instance = $host !== '' ? $host : 'php-standalone';
+        }
+
+        $meta['source_runtime'] = 'php_standalone';
+        $meta['source_instance'] = $instance;
+        $meta['source_host'] = $host;
+
+        return $meta;
     }
 
     private function buildGenericNoMatchSkipFinalizeResult(ImapMailboxClient $imap, array $message, bool $dryRun, array $genericNoMatch): array
@@ -2713,6 +2769,7 @@ class MailAssistantRunner
             'from' => (string) ($message['from'] ?? ''),
             'to' => (string) ($message['to'] ?? ''),
             'date' => (string) ($message['date'] ?? ''),
+            'body_preview' => $this->buildStateMessageBodyPreview($message, 1800),
             'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
             'outcome' => $outcome,
             'reason' => $reason,
@@ -2971,6 +3028,8 @@ class MailAssistantRunner
                 'reply_issue_id' => $replyIssueId,
                 'reply_subject' => $subject,
                 'transport' => 'dry_run',
+                'reply_text' => (string) ($replyContent['text'] ?? ''),
+                'reply_html' => (string) ($replyContent['html'] ?? ''),
             ];
         }
 
@@ -2995,6 +3054,8 @@ class MailAssistantRunner
                     'reply_issue_id' => $replyIssueId,
                     'reply_subject' => $subject,
                     'transport' => $transport,
+                    'reply_text' => (string) ($replyContent['text'] ?? ''),
+                    'reply_html' => (string) ($replyContent['html'] ?? ''),
                 ];
             } catch (Throwable $transportError) {
                 $attemptErrors[] = $transport . ': ' . $transportError->getMessage();
@@ -3025,6 +3086,8 @@ class MailAssistantRunner
         }
 
         try {
+            $replyContent = $this->buildReplyContent($body, $message, $rule);
+
             return $this->tools->syncSupportCase([
                 'mailbox_id' => $mailboxId,
                 'mailbox_name' => (string) ($mailbox['name'] ?? ''),
@@ -3043,15 +3106,20 @@ class MailAssistantRunner
                 'date' => date('c'),
                 'status' => 'handled',
                 'reason' => 'reply_prepared_for_delivery',
+                'body_text' => (string) (($message['body_text'] ?? null) ?: ''),
+                'body_text_reply_aware' => (string) (($message['body_text_reply_aware'] ?? null) ?: (($message['body_text'] ?? null) ?: '')),
+                'body_html' => (string) (($message['body_html'] ?? null) ?: ''),
                 'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
+                'reply_body_text' => (string) ($replyContent['text'] ?? ''),
+                'reply_body_html' => (string) ($replyContent['html'] ?? ''),
                 'reply_excerpt' => $this->buildStateExcerpt($body, 500),
                 'selected_rule' => $this->buildRuleSummaryFromRule($rule),
                 'selected_rule_id' => (int) ($rule['id'] ?? 0),
                 'selected_rule_name' => (string) ($rule['name'] ?? ''),
-                'meta' => [
+                'meta' => $this->buildSupportCaseSyncMeta([
                     'reply_transport' => 'pending_delivery',
                     'reply_sent' => true,
-                ],
+                ]),
             ]);
         } catch (Throwable $e) {
             $this->logger->warning('Could not pre-create support case link for outgoing reply.', [
@@ -3662,6 +3730,8 @@ class MailAssistantRunner
         $password = (string) Env::get('MAIL_ASSISTANT_SMTP_PASSWORD', '');
         $ehlo = trim((string) Env::get('MAIL_ASSISTANT_SMTP_EHLO', ''));
         $timeout = max(5, (int) Env::get('MAIL_ASSISTANT_SMTP_TIMEOUT', '20'));
+        $verifyTls = Env::bool('MAIL_ASSISTANT_SMTP_SSL_VERIFY', true);
+        $caFile = trim((string) Env::get('MAIL_ASSISTANT_SMTP_CA_FILE', ''));
 
         if ($host === '') {
             throw new RuntimeException('MAIL_ASSISTANT_SMTP_HOST is not configured.');
@@ -3707,7 +3777,26 @@ class MailAssistantRunner
         }
 
         $transportHost = $security === 'ssl' ? 'ssl://' . $host : $host;
-        $socket = @stream_socket_client($transportHost . ':' . $port, $errno, $errstr, $timeout, STREAM_CLIENT_CONNECT);
+        $contextOptions = [];
+        if ($security !== 'none') {
+            $contextOptions['ssl'] = [
+                'verify_peer' => $verifyTls,
+                'verify_peer_name' => $verifyTls,
+                'allow_self_signed' => !$verifyTls,
+                'SNI_enabled' => true,
+            ];
+            if ($caFile !== '' && is_readable($caFile)) {
+                $contextOptions['ssl']['cafile'] = $caFile;
+            }
+        }
+        $socket = @stream_socket_client(
+            $transportHost . ':' . $port,
+            $errno,
+            $errstr,
+            $timeout,
+            STREAM_CLIENT_CONNECT,
+            stream_context_create($contextOptions)
+        );
         if (!is_resource($socket)) {
             throw new RuntimeException('SMTP connect failed: ' . trim($errstr . ' (' . $errno . ')'));
         }

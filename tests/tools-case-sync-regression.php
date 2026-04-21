@@ -151,6 +151,9 @@ assertSameValue(1, (int) ($result['messages_skipped'] ?? 0), 'Message should rem
 assertTrueValue(count($tools->syncCalls) >= 1, 'At least one Tools case sync call should be recorded.');
 assertSameValue(77, (int) ($tools->syncCalls[0]['mailbox_id'] ?? 0), 'Case sync payload should contain the mailbox id.');
 assertSameValue('case-sync@example.test', (string) ($tools->syncCalls[0]['message_id'] ?? ''), 'Case sync payload should contain the inbound message id.');
+assertSameValue('The feed import has stopped working.', (string) ($tools->syncCalls[0]['body_text'] ?? ''), 'Case sync payload should now include the full plain-text inbound body.');
+assertSameValue('The feed import has stopped working.', (string) ($tools->syncCalls[0]['body_text_reply_aware'] ?? ''), 'Case sync payload should include the reply-aware inbound body too.');
+assertTrueValue(!empty(($tools->syncCalls[0]['meta']['source_instance'] ?? '')), 'Case sync payload should include centralized source-instance metadata.');
 
 echo "tools-case-sync-regression: OK\n";
 

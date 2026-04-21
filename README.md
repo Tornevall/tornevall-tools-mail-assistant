@@ -9,6 +9,8 @@ This project is intentionally small and can stay **databaseless**:
 - unmatched fallback now supports ordered add-row IF + instruction rules (`defaults.generic_no_match_rules[]`) plus one stricter mailbox-owned last fallback (`defaults.generic_no_match_if` / `generic_no_match_instruction`)
 - outgoing replies can now stamp one stable issue-id tag into the subject (default style: `[Ärende MSA-XXXXXXXX]`) and later replies in the same conversation reuse that same tag instead of appending a new one on every reply
 - the standalone client can now also sync processed inbox threads back into Tools as tracked support cases, with a public case link that can be appended to outgoing replies
+- synced Tools cases can now also carry centrally stored full inbound/outbound body content plus source-instance metadata, so Tools admin can show more than just excerpts even when the cronjob runs on another server
+- the standalone runner now also refreshes one stable local message copy per scanned mail, which makes the dashboard/manual handling flows much less likely to lose the visible body content between runs
 - local state is still limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`; the actual threaded case archive can now live in Tools
 
 The project is **not** a Laravel app and must stay runnable as plain PHP.
@@ -71,6 +73,7 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
    - `MAIL_ASSISTANT_TOOLS_BASE_URL`
    - `MAIL_ASSISTANT_TOOLS_TOKEN`
    - optional dedicated relay token: `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`
+   - optional Tools TLS overrides for WSL/self-signed environments: `MAIL_ASSISTANT_TOOLS_SSL_VERIFY=true|false`, `MAIL_ASSISTANT_TOOLS_CA_BUNDLE=/path/to/ca.pem`
    - optional: `MAIL_ASSISTANT_SPAMASSASSIN_SKIP_SCORE` and `MAIL_ASSISTANT_SPAMASSASSIN_COPY_SCORE`
    - optional AI tuning: `MAIL_ASSISTANT_AI_MODEL`, `MAIL_ASSISTANT_AI_FALLBACK_MODEL`, `MAIL_ASSISTANT_AI_REASONING_EFFORT`
    - optional quota alerting: `MAIL_ASSISTANT_QUOTA_ALERT_EMAIL`, `MAIL_ASSISTANT_QUOTA_ALERT_COOLDOWN_SECONDS`, `MAIL_ASSISTANT_ALERT_FROM_NAME`, `MAIL_ASSISTANT_ALERT_FROM_EMAIL`
@@ -84,7 +87,9 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TRANSPORTS` (optional comma-separated fallback order such as `smtp,tools_api,pickup`)
      - SMTP keys: `MAIL_ASSISTANT_SMTP_HOST`, `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_USERNAME`, `MAIL_ASSISTANT_SMTP_PASSWORD`
       - optional SMTP overrides: `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, `MAIL_ASSISTANT_SMTP_TIMEOUT`, `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE`
+      - optional SMTP TLS overrides for self-signed / broken CA environments: `MAIL_ASSISTANT_SMTP_SSL_VERIFY=true|false`, `MAIL_ASSISTANT_SMTP_CA_FILE=/path/to/ca.pem`
       - optional standalone reply fallback BCC: `MAIL_ASSISTANT_DEFAULT_BCC` (used only when neither the matched rule nor the mailbox config already supplies a BCC)
+      - optional source label for centralized case history/debugging: `MAIL_ASSISTANT_INSTANCE_NAME=server-a-cron`
      - `MAIL_ASSISTANT_MTA_COMMAND` (used when transport is `custom_mta`)
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API` (`true|false`)
      - optional reply-subject issue-id controls:
@@ -162,6 +167,7 @@ Current UI features:
 - operator actions directly from latest-run message cards: assign a local rule context, send a manual reply, or mark the message handled/read for manual follow-up
 - message cards can now also expose linked Tools case URLs, and outgoing replies can append a public case-tracking link for the recipient when Tools case sync is available
 - processed inbox outcomes can now be synced back into Tools as threaded support cases, which also makes those cases visible from `/admin/mail-support-assistant` on the Tools host
+- those synced Tools cases can now also store the full inbound/outbound body text and the source runner/server identity, so Tools admin can be used as a more central operator history even when mail was processed elsewhere
 - standalone can now optionally send one summary mail after a run listing the messages that were not answered when `MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED=true`
 - human-readable Tools config summary (mailboxes, rule counts, matched rule rows, fallback-rule details, and unmatched AI/IF rows) with raw JSON still available under collapsible advanced sections
 - visible runtime alert cards for AI quota/billing failures plus Tools-side daily AI budget exhaustion/low-budget warnings when available in config
@@ -294,6 +300,7 @@ Rules can decide per message whether AI is enabled.
 - The runner now parses SpamAssassin headers so heavily flagged messages can be skipped before handling, while wrapper-style SpamAssassin rewrites can still be copied locally and stripped from the body before rule matching/AI.
 - Spam score extraction now also reads `X-Spam-Score` directly when `X-Spam-Status` does not provide a parseable `score=` value.
 - Local SpamAssassin/debug copies are written under `storage/cache/message-copies/` when the runner detects a rewritten wrapper or another message worth preserving for review.
+- The runner now also refreshes one stable local message copy for each scanned mail, so the dashboard/manual handling view can keep showing the actual body text even when the saved run summary only stores shorter excerpts.
 - The mini dashboard can still show local message-history details when history mode has been requested, but unread reruns are never blocked by that history.
 - Reply sending now supports multiple transports:
   - `smtp` (default, direct SMTP delivery without requiring local sendmail/postfix)
@@ -309,6 +316,7 @@ Rules can decide per message whether AI is enabled.
 - `MAIL_ASSISTANT_MAIL_FALLBACK_TRANSPORTS` can define an explicit ordered fallback chain. If it is left empty, the runner keeps the legacy compatibility behavior where `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true` appends the Tools relay as a fallback.
 - SMTP is now more forgiving when optional override keys are left blank: empty `MAIL_ASSISTANT_SMTP_SECURITY`, `MAIL_ASSISTANT_SMTP_EHLO`, and `MAIL_ASSISTANT_SMTP_FROM_ENVELOPE` automatically fall back to sensible defaults instead of being treated as invalid configuration.
 - In practice, `MAIL_ASSISTANT_SMTP_HOST` plus the usual `MAIL_ASSISTANT_SMTP_PORT`, `MAIL_ASSISTANT_SMTP_USERNAME`, and `MAIL_ASSISTANT_SMTP_PASSWORD` are enough for most authenticated SMTP setups.
+- If WSL/local CA trust is broken, the standalone runtime can now separately disable TLS verification for Tools API requests (`MAIL_ASSISTANT_TOOLS_SSL_VERIFY=false`) and SMTP (`MAIL_ASSISTANT_SMTP_SSL_VERIFY=false`), or point either side at a custom CA bundle/file instead.
 - If neither a matched rule nor the mailbox defaults define a BCC recipient, the standalone runtime can now fall back to `MAIL_ASSISTANT_DEFAULT_BCC` from `.env`.
 - CC/BCC parsing is now more tolerant of semicolon-separated or line-wrapped address lists, which helps preserve copied recipients even when mailbox config or relay headers are formatted less strictly.
 - Tools relay requires a dedicated personal token (`provider_mail_support_assistant_mailer`) and the `mail-support-assistant.relay` permission for the token owner (admin bypass still applies); the relay payload can now include both `body` and additive `body_html`.

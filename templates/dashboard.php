@@ -334,6 +334,7 @@
         const matchingRules = Array.isArray(message.matching_rules) ? message.matching_rules : [];
         const evaluatedRows = Array.isArray(genericDecision.evaluated_no_match_rules) ? genericDecision.evaluated_no_match_rules : [];
         const availableRules = Array.isArray(mailbox.available_rules) ? mailbox.available_rules : [];
+        const visibleBody = String(message.body_preview || (copy && copy.body_preview) || message.body_excerpt || '').trim();
         const ruleOptions = ['<option value="">No local rule assignment</option>'].concat(availableRules.map((rule) => {
             const selected = Number(rule.id) === Number(message.selected_rule?.id || 0) ? ' selected' : '';
             return `<option value="${escapeHtml(rule.id)}"${selected}>#${escapeHtml(rule.id)} · ${escapeHtml(rule.name || 'Rule')} (sort ${escapeHtml(rule.sort_order || 0)})</option>`;
@@ -364,7 +365,7 @@
                         ${message.reply_transport ? `<span class="pill pill-muted">reply via ${escapeHtml(message.reply_transport)}</span>` : ''}
                     </div>
                 </div>
-                ${message.body_excerpt ? `<div class="message-excerpt">${escapeHtml(message.body_excerpt)}</div>` : ''}
+                ${visibleBody ? `<div class="message-excerpt">${escapeHtml(visibleBody)}</div>` : ''}
                 <div class="message-actions-note">
                     This lightweight operator inbox now supports local rule assignment, styled manual replies, and manual mark-handled actions.
                     ${mailbox.source === 'live_inbox'
@@ -425,6 +426,7 @@
                             { label: 'Copy reason', value: copy ? (copy.reason || '') : '' },
                             { label: 'Copy saved at', value: copy ? (copy.saved_at || '') : '' },
                         ].filter((row) => String(row.value || '').trim() !== ''))}
+                        ${copy && copy.body_preview ? renderTextBlock('Saved local body preview', copy.body_preview) : ''}
                     </details>`
                     : ''}
             </article>

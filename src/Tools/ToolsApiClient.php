@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-     private const CLIENT_VERSION = '0.3.39';
+     private const CLIENT_VERSION = '0.3.40';
 
     private string $baseUrl;
     private string $token;
@@ -973,6 +973,9 @@ class ToolsApiClient
             'Authorization: Bearer ' . $token,
         ];
 
+        $verifyTls = Env::bool('MAIL_ASSISTANT_TOOLS_SSL_VERIFY', true);
+        $caBundle = trim((string) Env::get('MAIL_ASSISTANT_TOOLS_CA_BUNDLE', ''));
+
         curl_setopt_array($ch, [
             CURLOPT_URL => $url,
             CURLOPT_RETURNTRANSFER => true,
@@ -980,7 +983,13 @@ class ToolsApiClient
             CURLOPT_TIMEOUT => 45,
             CURLOPT_CUSTOMREQUEST => strtoupper($method),
             CURLOPT_HTTPHEADER => $headers,
+            CURLOPT_SSL_VERIFYPEER => $verifyTls,
+            CURLOPT_SSL_VERIFYHOST => $verifyTls ? 2 : 0,
         ]);
+
+        if ($caBundle !== '' && is_readable($caBundle)) {
+            curl_setopt($ch, CURLOPT_CAINFO, $caBundle);
+        }
 
         if ($payload !== null) {
             $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);

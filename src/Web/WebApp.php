@@ -305,6 +305,7 @@ class WebApp
                     'outcome' => (string) ($message['outcome'] ?? ''),
                     'reason' => (string) ($message['reason'] ?? ''),
                     'reason_label' => $this->humanizeIdentifier((string) ($message['reason'] ?? '')),
+                    'body_preview' => (string) (($message['body_preview'] ?? null) ?: ($copy['body_preview'] ?? (($message['body_excerpt'] ?? null) ?: ''))),
                     'body_excerpt' => (string) (($message['body_excerpt'] ?? null) ?: ($copy['body_excerpt'] ?? '')),
                     'selected_rule' => is_array($message['selected_rule'] ?? null) ? $message['selected_rule'] : null,
                     'matching_rule_count' => (int) ($message['matching_rule_count'] ?? 0),
@@ -590,6 +591,7 @@ class WebApp
                 'to' => (string) ($message['to'] ?? ''),
                 'date' => (string) ($message['date'] ?? ''),
                 'headers_map' => $headers,
+                'body_preview' => $this->excerpt((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 2400),
                 'body_excerpt' => $this->excerpt((string) (($message['body_text_reply_aware'] ?? null) ?: ($message['body_text'] ?? '')), 900),
             ];
         }
@@ -850,8 +852,8 @@ class WebApp
                     'from' => (string) ($message['from'] ?? ''),
                     'to' => (string) ($message['to'] ?? ''),
                     'date' => (string) ($message['date'] ?? ''),
-                    'body_text' => (string) (($copyMessage['body_text'] ?? null) ?: (($message['body_excerpt'] ?? null) ?: '')),
-                    'body_text_reply_aware' => (string) (($copyMessage['body_text_reply_aware'] ?? null) ?: (($copyMessage['body_text'] ?? null) ?: (($message['body_excerpt'] ?? null) ?: ''))),
+                    'body_text' => (string) (($copyMessage['body_text'] ?? null) ?: (($message['body_preview'] ?? null) ?: (($message['body_excerpt'] ?? null) ?: ''))),
+                    'body_text_reply_aware' => (string) (($copyMessage['body_text_reply_aware'] ?? null) ?: (($copyMessage['body_text'] ?? null) ?: (($message['body_preview'] ?? null) ?: (($message['body_excerpt'] ?? null) ?: '')))),
                     'body_text_raw' => (string) (($copyMessage['body_text_raw'] ?? null) ?: ''),
                     'headers_map' => is_array($copyMessage['headers_map'] ?? null) ? $copyMessage['headers_map'] : [],
                     'headers_raw' => (string) (($copyMessage['headers_raw'] ?? null) ?: ''),

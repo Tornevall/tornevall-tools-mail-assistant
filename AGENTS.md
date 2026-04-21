@@ -29,6 +29,9 @@ It is expected to:
 - `src/Mail/MimeDecoder.php` - subject/body decoding helpers
 - `src/Runner/MailAssistantRunner.php` - orchestration logic
 - `src/Web/WebApp.php` - env-login dashboard
+- `src/Support/RunLock.php` - non-blocking local lock file helper for overlap-safe cron/dashboard runs
+- `tests/run-lock-regression.php` - verifies a second runner invocation is rejected while another process already holds the run lock
+- `tests/subject-issue-id-regression.php` - verifies outgoing reply subjects reuse one stable issue-id tag instead of appending a new one on every reply
 - `tests/dashboard-config-visibility-regression.php` - verifies the dashboard still shows config-only mailbox cards before any saved run exists and that readable matched-rule / unmatched-row AI fields stay exposed in the config summary
 - `tests/manual-reply-regression.php` - verifies operator-triggered manual replies reuse the same styled reply/transport pipeline and persist the chosen local rule assignment
 - `tests/quota-alert-regression.php` - verifies quota/billing failures become explicit runtime alerts and stop endless unmatched retries by marking the message seen for manual follow-up
@@ -66,6 +69,7 @@ It is expected to:
 - The standalone dashboard should now prefer a human-readable operator inbox over raw JSON dumps: mailbox/message cards, expandable diagnostics, optional local-header visibility from saved message copies, and lightweight continuity inspection. It is still **not** the place where the full mailbox/rule admin model should be duplicated; keep heavy admin/config in Tools.
 - That operator inbox can now also take care of latest-run mail directly: operators may assign a local rule context, send a manual reply through the same styled outbound pipeline as automatic replies, or mark a message handled/read so the unread poller stops retrying it.
 - The dashboard's activity tab should still list configured mailboxes even before any dry-run/real run has produced message cards, while clearly stating that this surface shows latest-run activity rather than a full live IMAP mail client.
+- CLI/dry-run runs must now refuse to start when another process already holds the same assistant instance's local run lock; overlapping cron invocations should skip cleanly instead of double-processing unread mail.
 - The dashboard's config tab should keep readable matched-rule rows, fallback-rule details, and unmatched AI/IF rows visible so operators do not have to reverse-engineer the raw JSON to understand what Tools actually sent to the standalone runner.
 - Runtime alert banners should stay prominent for AI quota/billing failures and Tools-side daily AI budget exhaustion/low-budget states when that metadata is present in config or the latest run summary.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is
@@ -84,6 +88,7 @@ It is expected to:
 - HTML-only or non-UTF8 inbound mail must not silently degrade into subject-only handling; MIME decoding should extract charset-aware plain text from HTML bodies before rule matching, AI context building, or appended request-summary generation runs.
 - Reply-chain continuity is now also rule-aware: when `In-Reply-To` / `References` link a new unread message to an earlier handled conversation, the runner may reuse the earlier matched rule or prioritize the earlier unmatched fallback row before it gives up as no-match.
 - Reply continuity now also has two extra safety nets: locally sent replies generate/store an explicit outgoing `reply_message_id`, and older/malformed follow-ups without usable reply headers may still recover continuity through normalized subject + same participants (`from` / `to`).
+- Outgoing replies may now also stamp one stable subject issue-id tag (default format like `[Ärende MSA-ABC12345]`), and later replies in the same thread should reuse that stored tag rather than appending a fresh one every time.
 - When a reply chain is explicitly linked to a previously approved unmatched thread, the runner may now continue that same unmatched row directly instead of re-running the initial allow-condition classifier for the same conversation.
 - Outgoing replies are now composed as `multipart/alternative`: keep the plain-text reply body, but also derive a
   styled HTML body so ordinary mail clients see a formatted support reply instead of raw plain text.

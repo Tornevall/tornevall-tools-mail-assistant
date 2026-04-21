@@ -73,10 +73,13 @@ if ($options['help']) {
     echo "  MAIL_ASSISTANT_SMTP_USERNAME / MAIL_ASSISTANT_SMTP_PASSWORD\n";
     echo "  MAIL_ASSISTANT_SMTP_EHLO / MAIL_ASSISTANT_SMTP_TIMEOUT / MAIL_ASSISTANT_SMTP_FROM_ENVELOPE\n";
     echo "  MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API / MAIL_ASSISTANT_MTA_COMMAND\n";
+    echo "  MAIL_ASSISTANT_SUBJECT_ISSUE_ID_ENABLED / MAIL_ASSISTANT_SUBJECT_ISSUE_LABEL\n";
+    echo "  MAIL_ASSISTANT_SUBJECT_ISSUE_PREFIX / MAIL_ASSISTANT_SUBJECT_ISSUE_LENGTH\n";
     echo "  MAIL_ASSISTANT_WEB_USER\n";
     echo "  MAIL_ASSISTANT_WEB_PASSWORD\n";
     echo "\nNotes:\n";
     echo "  History/message-state diagnostics are hidden by default and only included when --include-history is used.\n";
+    echo "  Concurrent run/dry-run executions are skipped automatically while another process holds the run lock.\n";
     exit(0);
 }
 

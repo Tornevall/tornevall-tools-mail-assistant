@@ -8,6 +8,7 @@ use MailSupportAssistant\Support\Env;
 use MailSupportAssistant\Support\Logger;
 use MailSupportAssistant\Support\MessageStateStore;
 use MailSupportAssistant\Support\ProjectPaths;
+use MailSupportAssistant\Support\RunLock;
 use MailSupportAssistant\Tools\ToolsApiClient;
 use RuntimeException;
 use Throwable;
@@ -20,14 +21,16 @@ class MailAssistantRunner
     private ToolsApiClient $tools;
     private Logger $logger;
     private MessageStateStore $messageState;
+    private RunLock $runLock;
     private bool $includeHistory = false;
     private array $runtimeAlerts = [];
 
-    public function __construct(ToolsApiClient $tools, Logger $logger, ?MessageStateStore $messageState = null)
+    public function __construct(ToolsApiClient $tools, Logger $logger, ?MessageStateStore $messageState = null, ?RunLock $runLock = null)
     {
         $this->tools = $tools;
         $this->logger = $logger;
         $this->messageState = $messageState ?: new MessageStateStore();
+        $this->runLock = $runLock ?: new RunLock();
     }
 
     public function selfTest(): array
@@ -40,6 +43,7 @@ class MailAssistantRunner
             'ext_imap_available' => function_exists('imap_open'),
             'storage_writable' => is_dir(ProjectPaths::storage()) && is_writable(ProjectPaths::storage()),
             'message_state_file' => ProjectPaths::messageStateFile(),
+            'run_lock_file' => $this->runLock->getLockFile(),
         ];
     }
 
@@ -107,7 +111,10 @@ class MailAssistantRunner
         $imap = $this->createImapMailboxClient((array) ($mailbox['imap'] ?? []));
         $subjectPrefix = trim((string) (($options['subject_prefix'] ?? null)
             ?: (($selectedRule['reply']['subject_prefix'] ?? null) ?: 'Re:')));
-        $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
+        if (!is_array($message['thread_context'] ?? null)) {
+            $message['thread_context'] = $this->messageState->summarizeThread((int) ($mailbox['id'] ?? 0), $message);
+        }
+        $subject = $this->buildReplySubject($message, $subjectPrefix);
         $ruleForReply = is_array($selectedRule) ? $selectedRule : ['reply' => []];
 
         $replyDelivery = $this->sendReply($mailbox, $ruleForReply, $message, $subject, $body, $dryRun);
@@ -122,6 +129,7 @@ class MailAssistantRunner
             'matching_rule_count' => $selectedRuleSummary ? 1 : 0,
             'matching_rules' => $selectedRuleSummary ? [$selectedRuleSummary] : [],
             'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
+            'reply_issue_id' => (string) ($replyDelivery['reply_issue_id'] ?? ''),
             'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
             'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
             'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
@@ -149,6 +157,7 @@ class MailAssistantRunner
             'reason' => $reason,
             'selected_rule' => $selectedRuleSummary,
             'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
+            'reply_issue_id' => (string) ($replyDelivery['reply_issue_id'] ?? ''),
             'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
             'post_handle_action' => (string) ($finalizeResult['post_handle_action'] ?? ''),
             'post_handle_warning' => (string) ($finalizeResult['post_handle_warning'] ?? ''),
@@ -231,23 +240,44 @@ class MailAssistantRunner
             $summary['message_state_mode'] = 'on_demand';
         }
 
-        try {
-            $config = $this->tools->fetchConfig();
-        } catch (Throwable $e) {
+        $lockInfo = $this->runLock->acquire($dryRun ? 'dry_run' : 'run');
+        $summary['run_lock'] = [
+            'acquired' => !empty($lockInfo['acquired']),
+            'lock_file' => (string) ($lockInfo['lock_file'] ?? $this->runLock->getLockFile()),
+            'metadata' => is_array($lockInfo['metadata'] ?? null) ? $lockInfo['metadata'] : [],
+        ];
+        if (empty($lockInfo['acquired'])) {
             $summary['ok'] = false;
-            $summary['errors'][] = $e->getMessage();
-            $this->logger->error('Failed to fetch config from Tools.', ['error' => $e->getMessage()]);
-            $this->logger->saveLastRun($summary);
+            $summary['reason'] = 'runner_already_active';
+            $summary['message'] = 'Another Mail Support Assistant process already holds the run lock, so this execution was skipped.';
+            $summary['errors'][] = $summary['message'];
+            $this->logger->warning('Mail assistant run skipped because another process already holds the run lock.', [
+                'dry_run' => $dryRun,
+                'lock_file' => $summary['run_lock']['lock_file'],
+                'lock_metadata' => $summary['run_lock']['metadata'],
+            ]);
+
             return $summary;
         }
 
-        $mailboxes = is_array($config['mailboxes'] ?? null) ? $config['mailboxes'] : [];
-        if ($mailboxFilter !== null) {
-            $mailboxes = array_values(array_filter($mailboxes, static fn (array $mailbox): bool => (int) ($mailbox['id'] ?? 0) === $mailboxFilter));
-        }
-        $summary['mailboxes_total'] = count($mailboxes);
+        try {
+            try {
+                $config = $this->tools->fetchConfig();
+            } catch (Throwable $e) {
+                $summary['ok'] = false;
+                $summary['errors'][] = $e->getMessage();
+                $this->logger->error('Failed to fetch config from Tools.', ['error' => $e->getMessage()]);
+                $this->logger->saveLastRun($summary);
+                return $summary;
+            }
 
-        foreach ($mailboxes as $mailbox) {
+            $mailboxes = is_array($config['mailboxes'] ?? null) ? $config['mailboxes'] : [];
+            if ($mailboxFilter !== null) {
+                $mailboxes = array_values(array_filter($mailboxes, static fn (array $mailbox): bool => (int) ($mailbox['id'] ?? 0) === $mailboxFilter));
+            }
+            $summary['mailboxes_total'] = count($mailboxes);
+
+            foreach ($mailboxes as $mailbox) {
             $mailboxSummary = [
                 'id' => (int) ($mailbox['id'] ?? 0),
                 'name' => (string) ($mailbox['name'] ?? ''),
@@ -444,6 +474,7 @@ class MailAssistantRunner
                                         'post_handle_action' => (string) ($genericNoMatch['post_handle_action'] ?? ''),
                                         'post_handle_warning' => (string) ($genericNoMatch['post_handle_warning'] ?? ''),
                                         'generic_ai_decision' => (array) ($genericNoMatch['ai_decision'] ?? []),
+                                        'reply_issue_id' => (string) ($genericNoMatch['reply_issue_id'] ?? ''),
                                         'rule_resolution_source' => (string) ($genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match')),
                                         'reused_from_message_id' => (string) ($genericNoMatch['reused_from_message_id'] ?? (($threadReuse['record']['message_id'] ?? null) ?: '')),
                                         'reused_from_reason' => (string) ($genericNoMatch['reused_from_reason'] ?? (($threadReuse['record']['reason'] ?? null) ?: '')),
@@ -456,6 +487,7 @@ class MailAssistantRunner
                                     'post_handle_warning' => (string) ($genericNoMatch['post_handle_warning'] ?? ''),
                                     'generic_ai_decision' => (array) ($genericNoMatch['ai_decision'] ?? []),
                                     'reply_message_id' => (string) ($genericNoMatch['reply_message_id'] ?? ''),
+                                    'reply_issue_id' => (string) ($genericNoMatch['reply_issue_id'] ?? ''),
                                     'reply_transport' => (string) ($genericNoMatch['reply_transport'] ?? ''),
                                     'rule_resolution_source' => (string) ($genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match')),
                                     'reused_from_message_id' => (string) ($genericNoMatch['reused_from_message_id'] ?? (($threadReuse['record']['message_id'] ?? null) ?: '')),
@@ -577,6 +609,7 @@ class MailAssistantRunner
                                     'reused_from_message_id' => (string) ($ruleResolution['reused_from_message_id'] ?? ''),
                                     'reused_from_reason' => (string) ($ruleResolution['reused_from_reason'] ?? ''),
                                     'reply_message_id' => (string) ($handleResult['reply_message_id'] ?? ''),
+                                    'reply_issue_id' => (string) ($handleResult['reply_issue_id'] ?? ''),
                                     'reply_transport' => (string) ($handleResult['reply_transport'] ?? ''),
                                     'post_handle_warning' => (string) ($handleResult['post_handle_warning'] ?? ''),
                                     'post_handle_action' => (string) ($handleResult['post_handle_action'] ?? ''),
@@ -590,6 +623,7 @@ class MailAssistantRunner
                                     'reused_from_message_id' => (string) ($ruleResolution['reused_from_message_id'] ?? ''),
                                     'reused_from_reason' => (string) ($ruleResolution['reused_from_reason'] ?? ''),
                                     'reply_message_id' => (string) ($handleResult['reply_message_id'] ?? ''),
+                                    'reply_issue_id' => (string) ($handleResult['reply_issue_id'] ?? ''),
                                     'reply_transport' => (string) ($handleResult['reply_transport'] ?? ''),
                                     'post_handle_warning' => (string) ($handleResult['post_handle_warning'] ?? ''),
                                     'post_handle_action' => (string) ($handleResult['post_handle_action'] ?? ''),
@@ -620,6 +654,7 @@ class MailAssistantRunner
                                 'reused_from_message_id' => (string) ($ruleResolution['reused_from_message_id'] ?? ''),
                                 'reused_from_reason' => (string) ($ruleResolution['reused_from_reason'] ?? ''),
                                 'reply_message_id' => (string) ($handleResult['reply_message_id'] ?? ''),
+                                'reply_issue_id' => (string) ($handleResult['reply_issue_id'] ?? ''),
                                 'reply_transport' => (string) ($handleResult['reply_transport'] ?? ''),
                                 'post_handle_warning' => (string) ($handleResult['post_handle_warning'] ?? ''),
                                 'post_handle_action' => (string) ($handleResult['post_handle_action'] ?? ''),
@@ -632,6 +667,7 @@ class MailAssistantRunner
                             'reused_from_message_id' => (string) ($ruleResolution['reused_from_message_id'] ?? ''),
                             'reused_from_reason' => (string) ($ruleResolution['reused_from_reason'] ?? ''),
                             'reply_message_id' => (string) ($handleResult['reply_message_id'] ?? ''),
+                            'reply_issue_id' => (string) ($handleResult['reply_issue_id'] ?? ''),
                             'reply_transport' => (string) ($handleResult['reply_transport'] ?? ''),
                             'post_handle_warning' => (string) ($handleResult['post_handle_warning'] ?? ''),
                             'post_handle_action' => (string) ($handleResult['post_handle_action'] ?? ''),
@@ -691,36 +727,39 @@ class MailAssistantRunner
                 $this->logger->error('Mailbox run failed.', ['mailbox' => $mailbox['name'] ?? null, 'error' => $e->getMessage()]);
             }
 
-            $summary['mailboxes'][] = $mailboxSummary;
+                $summary['mailboxes'][] = $mailboxSummary;
+            }
+
+            if ($this->includeHistory) {
+                $summary['message_state'] = $this->messageState->summary();
+            }
+
+            $summary['alerts'] = array_values($this->runtimeAlerts);
+            $summary['quota_alerts'] = array_values(array_filter($this->runtimeAlerts, static function (array $alert): bool {
+                return (string) ($alert['type'] ?? '') === 'ai_quota';
+            }));
+
+            $this->logger->info('Mail assistant run completed.', [
+                'dry_run' => $dryRun,
+                'mailboxes_total' => $summary['mailboxes_total'],
+                'messages_scanned' => $summary['messages_scanned'],
+                'messages_handled' => $summary['messages_handled'],
+                'messages_skipped' => $summary['messages_skipped'],
+                'messages_failed' => $summary['messages_failed'],
+                'messages_spamassassin_skipped' => $summary['messages_spamassassin_skipped'],
+                'messages_reply_spam_score_suppressed' => $summary['messages_reply_spam_score_suppressed'],
+                'messages_assistant_sent_skipped' => $summary['messages_assistant_sent_skipped'],
+                'messages_read_skipped' => $summary['messages_read_skipped'],
+                'spamassassin_copies_saved' => $summary['spamassassin_copies_saved'],
+                'errors' => count($summary['errors']),
+                'include_history' => $this->includeHistory,
+            ]);
+            $this->logger->saveLastRun($summary);
+
+            return $summary;
+        } finally {
+            $this->runLock->release();
         }
-
-        if ($this->includeHistory) {
-            $summary['message_state'] = $this->messageState->summary();
-        }
-
-        $summary['alerts'] = array_values($this->runtimeAlerts);
-        $summary['quota_alerts'] = array_values(array_filter($this->runtimeAlerts, static function (array $alert): bool {
-            return (string) ($alert['type'] ?? '') === 'ai_quota';
-        }));
-
-        $this->logger->info('Mail assistant run completed.', [
-            'dry_run' => $dryRun,
-            'mailboxes_total' => $summary['mailboxes_total'],
-            'messages_scanned' => $summary['messages_scanned'],
-            'messages_handled' => $summary['messages_handled'],
-            'messages_skipped' => $summary['messages_skipped'],
-            'messages_failed' => $summary['messages_failed'],
-            'messages_spamassassin_skipped' => $summary['messages_spamassassin_skipped'],
-            'messages_reply_spam_score_suppressed' => $summary['messages_reply_spam_score_suppressed'],
-            'messages_assistant_sent_skipped' => $summary['messages_assistant_sent_skipped'],
-            'messages_read_skipped' => $summary['messages_read_skipped'],
-            'spamassassin_copies_saved' => $summary['spamassassin_copies_saved'],
-            'errors' => count($summary['errors']),
-            'include_history' => $this->includeHistory,
-        ]);
-        $this->logger->saveLastRun($summary);
-
-        return $summary;
     }
 
     private function wasPreviouslyRepliedState(?array $priorState): bool
@@ -1103,7 +1142,7 @@ class MailAssistantRunner
 
                 $replyText = $this->applyGenericFallbackFooter($mailbox, $replyText, (string) ($noMatchRule['footer'] ?? ''));
                 $subjectPrefix = trim((string) (($defaults['generic_no_match_subject_prefix'] ?? null) ?: 'Re:'));
-                $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
+                $subject = $this->buildReplySubject($message, $subjectPrefix);
                 $syntheticRule = [
                     'reply' => [
                         'from_name' => (string) (($defaults['from_name'] ?? null) ?: ''),
@@ -1142,6 +1181,7 @@ class MailAssistantRunner
                     'ai_decision' => $this->attachGenericNoMatchEvaluationTrace($decision, $evaluatedRules),
                     'reply_excerpt' => $this->buildStateExcerpt($replyText, 500),
                     'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
+                    'reply_issue_id' => (string) ($replyDelivery['reply_issue_id'] ?? ''),
                     'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
                     'rule_resolution_source' => (string) (($threadReuse['source'] ?? null) ?: 'generic_no_match'),
                     'reused_from_message_id' => (string) (($threadReuse['record']['message_id'] ?? null) ?: ''),
@@ -1273,7 +1313,7 @@ class MailAssistantRunner
 
         $replyText = $this->applyGenericFallbackFooter($mailbox, $replyText, (string) ($noMatchRule['footer'] ?? ''));
         $subjectPrefix = trim((string) (($defaults['generic_no_match_subject_prefix'] ?? null) ?: 'Re:'));
-        $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), $subjectPrefix);
+        $subject = $this->buildReplySubject($message, $subjectPrefix);
         $syntheticRule = [
             'reply' => [
                 'from_name' => (string) (($defaults['from_name'] ?? null) ?: ''),
@@ -1318,6 +1358,7 @@ class MailAssistantRunner
             'ai_decision' => $this->attachGenericNoMatchEvaluationTrace($decision, $evaluatedRules),
             'reply_excerpt' => $this->buildStateExcerpt($replyText, 500),
             'reply_message_id' => (string) ($replyDelivery['reply_message_id'] ?? ''),
+            'reply_issue_id' => (string) ($replyDelivery['reply_issue_id'] ?? ''),
             'reply_transport' => (string) ($replyDelivery['transport'] ?? ''),
             'rule_resolution_source' => (string) (($threadReuse['source'] ?? null) ?: 'generic_no_match'),
             'reused_from_message_id' => (string) (($threadReuse['record']['message_id'] ?? null) ?: ''),
@@ -1512,7 +1553,7 @@ class MailAssistantRunner
         $replyDelivery = [];
         if (!empty($replyConfig['enabled'])) {
             $replyText = $this->buildReplyText($mailbox, $rule, $message);
-            $subject = $this->buildReplySubject((string) ($message['subject'] ?? ''), (string) (($replyConfig['subject_prefix'] ?? null) ?: 'Re:'));
+            $subject = $this->buildReplySubject($message, (string) (($replyConfig['subject_prefix'] ?? null) ?: 'Re:'));
             $replyDelivery = $this->sendReply($mailbox, $rule, $message, $subject, $replyText, $dryRun);
             $replySent = true;
         }
@@ -1537,6 +1578,7 @@ class MailAssistantRunner
         if ($replySent) {
             $finalizeResult['reply_excerpt'] = $this->buildStateExcerpt($replyText, 500);
             $finalizeResult['reply_message_id'] = (string) ($replyDelivery['reply_message_id'] ?? '');
+            $finalizeResult['reply_issue_id'] = (string) ($replyDelivery['reply_issue_id'] ?? '');
             $finalizeResult['reply_transport'] = (string) ($replyDelivery['transport'] ?? '');
         }
 
@@ -2377,14 +2419,148 @@ class MailAssistantRunner
         $mailboxSummary['message_results'][] = $result;
     }
 
-    private function buildReplySubject(string $subject, string $prefix): string
+    private function buildReplySubject(array $message, string $prefix): string
     {
         $prefix = trim($prefix) !== '' ? trim($prefix) : 'Re:';
-        if (stripos($subject, $prefix) === 0) {
-            return $subject;
+
+        $subject = trim((string) ($message['subject'] ?? ''));
+        $existingTag = $this->extractTrackedIssueTag($subject);
+        $replylessSubject = $this->stripLeadingReplyPrefixes($subject);
+        $subjectWithoutTag = trim(MimeDecoder::stripIssueTrackingTags($replylessSubject));
+        if ($subjectWithoutTag === '') {
+            $subjectWithoutTag = trim((string) (($message['subject_normalized'] ?? null) ?: $subject));
         }
 
-        return $prefix . ' ' . trim($subject);
+        $issueTag = $existingTag !== '' ? $existingTag : $this->buildReplyIssueTag($message);
+        $subjectCore = trim(implode(' ', array_values(array_filter([$issueTag, $subjectWithoutTag], static function (string $value): bool {
+            return trim($value) !== '';
+        }))));
+        if ($subjectCore === '') {
+            $subjectCore = $issueTag !== '' ? $issueTag : $subject;
+        }
+
+        return $prefix . ' ' . trim($subjectCore);
+    }
+
+    private function stripLeadingReplyPrefixes(string $subject): string
+    {
+        return trim((string) (preg_replace('/^(?:(?:re|fw|fwd|sv)\s*:\s*)+/iu', '', trim($subject)) ?? $subject));
+    }
+
+    private function extractTrackedIssueTag(string $subject): string
+    {
+        if (preg_match('/\[(?:[\p{L}]*rende|issue|ticket|case)\s+([^\[\]]+)\]/iu', $subject, $matches) !== 1) {
+            return '';
+        }
+
+        $tagValue = trim((string) ($matches[1] ?? ''));
+        if ($tagValue === '') {
+            return '';
+        }
+
+        $label = trim((string) Env::get('MAIL_ASSISTANT_SUBJECT_ISSUE_LABEL', 'Ärende'));
+        if ($label === '') {
+            $label = 'Ärende';
+        }
+
+        return '[' . $label . ' ' . strtoupper($tagValue) . ']';
+    }
+
+    private function extractIssueIdFromSubject(string $subject): string
+    {
+        if (preg_match('/\[(?:[\p{L}]*rende|issue|ticket|case)\s+([^\[\]]+)\]/iu', $subject, $matches) !== 1) {
+            return '';
+        }
+
+        return strtoupper(trim((string) ($matches[1] ?? '')));
+    }
+
+    private function buildReplyIssueTag(array $message): string
+    {
+        if (!Env::bool('MAIL_ASSISTANT_SUBJECT_ISSUE_ID_ENABLED', true)) {
+            return '';
+        }
+
+        $issueId = $this->resolveReplyIssueId($message);
+        if ($issueId === '') {
+            return '';
+        }
+
+        $label = trim((string) Env::get('MAIL_ASSISTANT_SUBJECT_ISSUE_LABEL', 'Ärende'));
+        if ($label === '') {
+            $label = 'Ärende';
+        }
+
+        return '[' . $label . ' ' . $issueId . ']';
+    }
+
+    private function resolveReplyIssueId(array $message): string
+    {
+        $existing = $this->extractIssueIdFromSubject((string) ($message['subject'] ?? ''));
+        if ($existing !== '') {
+            return $existing;
+        }
+
+        foreach (array_reverse((array) (($message['thread_context']['messages'] ?? null) ?: [])) as $entry) {
+            if (!is_array($entry)) {
+                continue;
+            }
+
+            $replyIssueId = strtoupper(trim((string) ($entry['reply_issue_id'] ?? '')));
+            if ($replyIssueId !== '') {
+                return $replyIssueId;
+            }
+
+            $replyIssueId = $this->extractIssueIdFromSubject((string) ($entry['subject'] ?? ''));
+            if ($replyIssueId !== '') {
+                return $replyIssueId;
+            }
+        }
+
+        $seed = $this->buildReplyIssueSeed($message);
+        if ($seed === '') {
+            return '';
+        }
+
+        $prefix = strtoupper(trim((string) Env::get('MAIL_ASSISTANT_SUBJECT_ISSUE_PREFIX', 'MSA')));
+        $length = max(4, min(16, Env::int('MAIL_ASSISTANT_SUBJECT_ISSUE_LENGTH', 8)));
+        $suffix = strtoupper(substr(sha1($seed), 0, $length));
+
+        return $prefix !== '' ? ($prefix . '-' . $suffix) : $suffix;
+    }
+
+    private function buildReplyIssueSeed(array $message): string
+    {
+        $parts = [];
+
+        $messageId = trim((string) (($message['message_id'] ?? null) ?: ($message['message_key'] ?? '')));
+        if ($messageId !== '') {
+            $parts[] = 'message:' . strtolower($messageId);
+        }
+
+        $participants = [
+            strtolower(trim((string) ($message['from'] ?? ''))),
+            strtolower(trim((string) ($message['to'] ?? ''))),
+        ];
+        $participants = array_values(array_filter($participants, static function (string $value): bool {
+            return $value !== '';
+        }));
+        if (count($participants)) {
+            sort($participants);
+            $parts[] = 'participants:' . implode('|', $participants);
+        }
+
+        $normalizedSubject = MimeDecoder::normalizeReplySubject((string) (($message['subject_normalized'] ?? null) ?: ($message['subject'] ?? '')));
+        if ($normalizedSubject !== '') {
+            $parts[] = 'subject:' . strtolower($normalizedSubject);
+        }
+
+        $threadKey = trim((string) ($message['thread_key'] ?? ''));
+        if ($threadKey !== '') {
+            $parts[] = 'thread:' . strtolower($threadKey);
+        }
+
+        return implode('|', $parts);
     }
 
     private function normalizeSubjectLine(string $subject, array $mailbox, array $rule = []): string
@@ -2438,6 +2614,7 @@ class MailAssistantRunner
         }
 
         $replyContent = $this->buildReplyContent($body, $message, $rule);
+        $replyIssueId = $this->extractIssueIdFromSubject($subject);
         $replyMessageId = $this->buildOutgoingReplyMessageId($fromEmail, $message);
         $headers = [
             'From: ' . $fromName . ' <' . $fromEmail . '>',
@@ -2476,9 +2653,11 @@ class MailAssistantRunner
                 'bcc' => $resolvedRecipients['bcc'],
                 'has_html' => !empty($replyContent['html']),
                 'reply_message_id' => $replyMessageId,
+                'reply_issue_id' => $replyIssueId,
             ]);
             return [
                 'reply_message_id' => $replyMessageId,
+                'reply_issue_id' => $replyIssueId,
                 'transport' => 'dry_run',
             ];
         }
@@ -2501,6 +2680,7 @@ class MailAssistantRunner
                 $this->deliverReplyViaTransport($transport, $mailbox, $rule, $message, $to, $subject, $replyContent, $headers, $resolvedRecipients, $attemptIndex === 0);
                 return [
                     'reply_message_id' => $replyMessageId,
+                    'reply_issue_id' => $replyIssueId,
                     'transport' => $transport,
                 ];
             } catch (Throwable $transportError) {

@@ -7,6 +7,7 @@ This project is intentionally small and can stay **databaseless**:
 - mailbox + rule configuration lives in Tools admin
 - the client fetches config from `GET /api/mail-support-assistant/config`
 - unmatched fallback now supports ordered add-row IF + instruction rules (`defaults.generic_no_match_rules[]`) plus one stricter mailbox-owned last fallback (`defaults.generic_no_match_if` / `generic_no_match_instruction`)
+- outgoing replies can now stamp one stable issue-id tag into the subject (default style: `[Ärende MSA-XXXXXXXX]`) and later replies in the same conversation reuse that same tag instead of appending a new one on every reply
 - local state is limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`
 
 The project is **not** a Laravel app and must stay runnable as plain PHP.
@@ -20,6 +21,7 @@ The project is **not** a Laravel app and must stay runnable as plain PHP.
 - `templates/` - minimal login/dashboard templates
 - `storage/` - logs, last-run summary, and persisted local state
 - `storage/state/message-state.json` - optional normalized local message history per mailbox for diagnostics when explicitly requested
+- `storage/state/run.lock` - non-blocking local lock file that prevents overlapping cron/dashboard runner executions
 
 ## Requirements
 
@@ -79,6 +81,11 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
       - optional standalone reply fallback BCC: `MAIL_ASSISTANT_DEFAULT_BCC` (used only when neither the matched rule nor the mailbox config already supplies a BCC)
      - `MAIL_ASSISTANT_MTA_COMMAND` (used when transport is `custom_mta`)
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API` (`true|false`)
+     - optional reply-subject issue-id controls:
+       - `MAIL_ASSISTANT_SUBJECT_ISSUE_ID_ENABLED` (`true|false`, default `true`)
+       - `MAIL_ASSISTANT_SUBJECT_ISSUE_LABEL` (default `Ärende`)
+       - `MAIL_ASSISTANT_SUBJECT_ISSUE_PREFIX` (default `MSA`)
+       - `MAIL_ASSISTANT_SUBJECT_ISSUE_LENGTH` (default `8`)
 3. In Tools admin, open `/admin/mail-support-assistant`
 4. Create mailbox/rule config there first (mailboxes, rules, strict unmatched fallback settings, advanced unmatched rows, sender defaults)
 5. Generate or rotate a personal `provider_mail_support_assistant` token there
@@ -118,6 +125,7 @@ php run --dry-run --include-history
 
 - fetches config from Tools
 - resolves matching rules
+- acquires the same run lock as a real run, so a dashboard dry-run or cron invocation is skipped immediately when another process is already polling the same assistant instance
 - builds reply payloads
 - skips actual reply send / IMAP move / IMAP delete actions
 

@@ -147,10 +147,27 @@ class MimeDecoder
         do {
             $previous = $normalized;
             $normalized = preg_replace('/^(?:(?:re|fw|fwd|sv)\s*:\s*)+/iu', '', $normalized) ?? $normalized;
+            $normalized = self::stripIssueTrackingTags($normalized);
             $normalized = trim((string) $normalized);
         } while ($normalized !== '' && $normalized !== $previous);
 
         return $normalized;
+    }
+
+    public static function stripIssueTrackingTags(string $subject): string
+    {
+        $subject = trim($subject);
+        if ($subject === '') {
+            return '';
+        }
+
+        do {
+            $previous = $subject;
+            $subject = preg_replace('/^\[(?:[\p{L}]*rende|issue|ticket|case)\s+[^[\]]+\]\s*/iu', '', $subject) ?? $subject;
+            $subject = trim((string) $subject);
+        } while ($subject !== '' && $subject !== $previous);
+
+        return $subject;
     }
 
     public static function stripQuotedReplyText(string $body): string

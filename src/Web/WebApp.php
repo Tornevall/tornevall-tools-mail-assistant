@@ -263,6 +263,7 @@ class WebApp
                     'matching_rules' => array_values((array) ($message['matching_rules'] ?? [])),
                     'generic_ai_decision' => is_array($message['generic_ai_decision'] ?? null) ? $message['generic_ai_decision'] : [],
                     'reply_message_id' => (string) ($message['reply_message_id'] ?? ''),
+                    'reply_issue_id' => (string) ($message['reply_issue_id'] ?? ''),
                     'reply_transport' => (string) ($message['reply_transport'] ?? ''),
                     'rule_resolution_source' => (string) ($message['rule_resolution_source'] ?? ''),
                     'reused_from_message_id' => (string) ($message['reused_from_message_id'] ?? ''),
@@ -676,6 +677,7 @@ class WebApp
                     'uid' => (int) ($message['uid'] ?? 0),
                     'message_id' => (string) ($message['message_id'] ?? ''),
                     'message_key' => (string) ($message['message_key'] ?? ''),
+                    'reply_issue_id' => (string) ($message['reply_issue_id'] ?? ''),
                     'thread_key' => (string) ($message['thread_key'] ?? ''),
                     'in_reply_to' => (string) ($message['in_reply_to'] ?? ''),
                     'references' => array_values((array) ($message['references'] ?? [])),
@@ -739,6 +741,7 @@ class WebApp
                 $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['matching_rule_count'] = !empty($actionResult['selected_rule']) ? 1 : 0;
                 $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['matching_rules'] = !empty($actionResult['selected_rule']) ? [$actionResult['selected_rule']] : [];
                 $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['reply_message_id'] = (string) ($actionResult['reply_message_id'] ?? '');
+                $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['reply_issue_id'] = (string) ($actionResult['reply_issue_id'] ?? '');
                 $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['reply_transport'] = (string) ($actionResult['reply_transport'] ?? '');
                 $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['post_handle_action'] = (string) ($actionResult['post_handle_action'] ?? '');
                 $lastRun['mailboxes'][$mailboxIndex]['message_results'][$messageIndex]['post_handle_warning'] = (string) ($actionResult['post_handle_warning'] ?? '');
@@ -848,12 +851,15 @@ class WebApp
                     'limit' => $limit !== '' ? (int) $limit : null,
                     'mailbox' => $mailbox !== '' ? (int) $mailbox : null,
                 ]);
+                $status = !empty($result['ok'])
+                    ? 200
+                    : ((string) ($result['reason'] ?? '') === 'runner_already_active' ? 409 : 500);
 
                 $this->json([
                     'ok' => !empty($result['ok']),
                     'result' => $result,
                     'data' => $this->buildDashboardPayload(),
-                ], !empty($result['ok']) ? 200 : 500);
+                ], $status);
             }
 
             if ($action === 'manual-reply') {

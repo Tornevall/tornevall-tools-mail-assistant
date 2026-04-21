@@ -128,6 +128,7 @@ class MessageStateStore
                         'message_id' => (string) ($message['message_id'] ?? ''),
                         'message_key' => (string) ($message['message_key'] ?? ''),
                         'reply_message_id' => (string) ($message['reply_message_id'] ?? ''),
+                        'reply_issue_id' => (string) ($message['reply_issue_id'] ?? ''),
                         'status' => (string) ($message['status'] ?? ''),
                         'reason' => (string) ($message['reason'] ?? ''),
                         'subject' => (string) ($message['subject'] ?? ''),
@@ -151,6 +152,7 @@ class MessageStateStore
                         'message_id' => (string) ($message['message_id'] ?? ''),
                         'message_key' => (string) ($message['message_key'] ?? ''),
                         'reply_message_id' => (string) ($message['reply_message_id'] ?? ''),
+                        'reply_issue_id' => (string) ($message['reply_issue_id'] ?? ''),
                         'status' => (string) ($message['status'] ?? ''),
                         'reason' => (string) ($message['reason'] ?? ''),
                         'subject' => (string) ($message['subject'] ?? ''),
@@ -233,6 +235,7 @@ class MessageStateStore
             $summary = [
                 'message_id' => (string) ($record['message_id'] ?? ''),
                 'reply_message_id' => (string) ($record['reply_message_id'] ?? ''),
+                'reply_issue_id' => (string) ($record['reply_issue_id'] ?? ''),
                 'status' => (string) ($record['status'] ?? ''),
                 'reason' => (string) ($record['reason'] ?? ''),
                 'subject' => (string) ($record['subject'] ?? ''),

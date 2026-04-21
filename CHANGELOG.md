@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.3.37 - 2026-04-21
+
+- CLI/dry-run executions now acquire a dedicated local run lock (`storage/state/run.lock`) before polling unread mail, so overlapping cron/dashboard runs are skipped cleanly instead of double-processing the same mailbox at the same time.
+- The dry-run/dashboard path now reports that overlap as a structured `runner_already_active` conflict and exposes the current lock holder metadata for operator troubleshooting.
+- Outgoing reply subjects can now carry a stable issue/case tag (default format like `[Ärende MSA-ABC12345]`) and later replies reuse the same tag instead of appending a new one every time the conversation is answered.
+- Subject normalization and local thread-history summaries now strip/reuse those issue tags correctly so reply-chain matching still works even after tagged replies have been sent.
+- Added regression coverage in `tests/run-lock-regression.php` and `tests/subject-issue-id-regression.php`, while the existing reply-chain/manual-reply regressions now also run against the tagged-subject behavior.
+
 ## 0.3.36 - 2026-04-21
 
 - HTML-only inbound mail bodies are now converted into readable plain text before rule matching, unmatched-mail AI triage, appended **Summary of your request** excerpts, and saved local message copies are built, so the standalone client no longer falls back to acting like only the subject exists when the body arrived as HTML.

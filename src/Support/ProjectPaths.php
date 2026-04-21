@@ -39,6 +39,11 @@ class ProjectPaths
         return static::cache() . DIRECTORY_SEPARATOR . 'message-copies';
     }
 
+    public static function runLockFile(): string
+    {
+        return static::state() . DIRECTORY_SEPARATOR . 'run.lock';
+    }
+
     public static function ensureStorage(): void
     {
         foreach ([static::storage(), static::logs(), static::cache(), static::state(), static::messageCopies()] as $dir) {

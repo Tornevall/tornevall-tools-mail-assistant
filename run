@@ -68,6 +68,8 @@ if ($options['help']) {
     echo "  MAIL_ASSISTANT_TOOLS_TOKEN\n";
     echo "  MAIL_ASSISTANT_TOOLS_MAIL_TOKEN\n";
     echo "  MAIL_ASSISTANT_CLI_PROGRESS\n";
+    echo "  MAIL_ASSISTANT_INCLUDE_CASE_LINK\n";
+    echo "  MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED / MAIL_ASSISTANT_UNANSWERED_REPORT_TO\n";
     echo "  MAIL_ASSISTANT_MAIL_TRANSPORT (smtp|php_mail|custom_mta|tools_api)\n";
     echo "  MAIL_ASSISTANT_SMTP_HOST / MAIL_ASSISTANT_SMTP_PORT / MAIL_ASSISTANT_SMTP_SECURITY\n";
     echo "  MAIL_ASSISTANT_SMTP_USERNAME / MAIL_ASSISTANT_SMTP_PASSWORD\n";
@@ -82,6 +84,7 @@ if ($options['help']) {
     echo "  History/message-state diagnostics are hidden by default and only included when --include-history is used.\n";
     echo "  Concurrent run/dry-run executions are skipped automatically while another process holds the run lock.\n";
     echo "  cron-run.sh also keeps its own PID-aware shell lock so overlapping cron invocations can be rejected before PHP starts.\n";
+    echo "  Processed message outcomes can now be synced back into Tools as threaded support cases when the Tools token is valid.\n";
     exit(0);
 }
 

@@ -8,7 +8,8 @@ This project is intentionally small and can stay **databaseless**:
 - the client fetches config from `GET /api/mail-support-assistant/config`
 - unmatched fallback now supports ordered add-row IF + instruction rules (`defaults.generic_no_match_rules[]`) plus one stricter mailbox-owned last fallback (`defaults.generic_no_match_if` / `generic_no_match_instruction`)
 - outgoing replies can now stamp one stable issue-id tag into the subject (default style: `[Ärende MSA-XXXXXXXX]`) and later replies in the same conversation reuse that same tag instead of appending a new one on every reply
-- local state is limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`
+- the standalone client can now also sync processed inbox threads back into Tools as tracked support cases, with a public case link that can be appended to outgoing replies
+- local state is still limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`; the actual threaded case archive can now live in Tools
 
 The project is **not** a Laravel app and must stay runnable as plain PHP.
 
@@ -73,6 +74,10 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
    - optional: `MAIL_ASSISTANT_SPAMASSASSIN_SKIP_SCORE` and `MAIL_ASSISTANT_SPAMASSASSIN_COPY_SCORE`
    - optional AI tuning: `MAIL_ASSISTANT_AI_MODEL`, `MAIL_ASSISTANT_AI_FALLBACK_MODEL`, `MAIL_ASSISTANT_AI_REASONING_EFFORT`
    - optional quota alerting: `MAIL_ASSISTANT_QUOTA_ALERT_EMAIL`, `MAIL_ASSISTANT_QUOTA_ALERT_COOLDOWN_SECONDS`, `MAIL_ASSISTANT_ALERT_FROM_NAME`, `MAIL_ASSISTANT_ALERT_FROM_EMAIL`
+   - optional case/report behavior:
+     - `MAIL_ASSISTANT_INCLUDE_CASE_LINK=true|false` (append a public Tools case link to outgoing replies when a Tools case could be prepared)
+     - `MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED=true|false`
+     - `MAIL_ASSISTANT_UNANSWERED_REPORT_TO=user@example.com[,second@example.com]`
    - optional CLI progress mirror: `MAIL_ASSISTANT_CLI_PROGRESS=true|false` (defaults to enabled for CLI so cron/manual runs print live log lines as they work)
    - optional mail transport tuning:
      - `MAIL_ASSISTANT_MAIL_TRANSPORT` (`smtp` | `pickup` | `php_mail` | `custom_mta` | `tools_api`)
@@ -151,9 +156,13 @@ Current UI features:
 - AJAX self-test action
 - AJAX-triggered safe dry-run action (reuses the same PHP runner as CLI)
 - mail-client-style activity cards for the latest run instead of only raw JSON blocks
+- live unread IMAP preview in the activity tab, so fresh unread messages can now show up even before another saved run exists
 - configured mailboxes are now still shown in the activity tab even before any saved run exists, with an explicit note that this is a latest-run operator view and not a live IMAP browser yet
 - expandable per-message diagnostics showing selected rule/no-match decision, thread metadata, and optional saved local headers
 - operator actions directly from latest-run message cards: assign a local rule context, send a manual reply, or mark the message handled/read for manual follow-up
+- message cards can now also expose linked Tools case URLs, and outgoing replies can append a public case-tracking link for the recipient when Tools case sync is available
+- processed inbox outcomes can now be synced back into Tools as threaded support cases, which also makes those cases visible from `/admin/mail-support-assistant` on the Tools host
+- standalone can now optionally send one summary mail after a run listing the messages that were not answered when `MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED=true`
 - human-readable Tools config summary (mailboxes, rule counts, matched rule rows, fallback-rule details, and unmatched AI/IF rows) with raw JSON still available under collapsible advanced sections
 - visible runtime alert cards for AI quota/billing failures plus Tools-side daily AI budget exhaustion/low-budget warnings when available in config
 - optional local message-history summary from `storage/state/message-state.json` when history mode has been requested previously
@@ -165,7 +174,7 @@ Current UI features:
 
 - **Cron/manual execution should still use PHP CLI**: `php run ...`
 - The web UI calls the same runner class for manual checks and dry-runs, but it is intended as an operator surface, not as the primary cron transport.
-- The dashboard is now intentionally a lightweight operator inbox rather than a full standalone admin clone of Tools. Mailbox/rule administration still happens primarily in Tools, but the local UI can now also take care of latest-run messages through manual replies or manual mark-handled/read actions.
+- The dashboard is now intentionally a lightweight operator inbox rather than a full standalone admin clone of Tools. Mailbox/rule administration still happens primarily in Tools, but the local UI can now also take care of latest-run/live-unread messages through manual replies or manual mark-handled/read actions.
 
 ## Cron example
 

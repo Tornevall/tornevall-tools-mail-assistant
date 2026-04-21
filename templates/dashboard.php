@@ -329,6 +329,7 @@
 
     const renderMessageCard = (message, mailbox) => {
         const copy = isPlainObject(message.copy) ? message.copy : null;
+        const supportCase = isPlainObject(message.support_case) ? message.support_case : null;
         const genericDecision = isPlainObject(message.generic_ai_decision) ? message.generic_ai_decision : {};
         const matchingRules = Array.isArray(message.matching_rules) ? message.matching_rules : [];
         const evaluatedRows = Array.isArray(genericDecision.evaluated_no_match_rules) ? genericDecision.evaluated_no_match_rules : [];
@@ -364,7 +365,18 @@
                     </div>
                 </div>
                 ${message.body_excerpt ? `<div class="message-excerpt">${escapeHtml(message.body_excerpt)}</div>` : ''}
-                <div class="message-actions-note">This lightweight operator inbox now supports local rule assignment, styled manual replies, and manual mark-handled actions for messages from the latest saved run.</div>
+                <div class="message-actions-note">
+                    This lightweight operator inbox now supports local rule assignment, styled manual replies, and manual mark-handled actions.
+                    ${mailbox.source === 'live_inbox'
+                        ? ' This card currently comes from the live unread IMAP preview, so you do not have to wait for another saved run before acting on it.'
+                        : ' This card currently comes from the latest saved run summary.'}
+                </div>
+                ${supportCase
+                    ? `<div class="operator-actions" style="margin-top:12px;">
+                        <a class="btn mutedbtn" href="${escapeHtml(supportCase.admin_url || '#')}" target="_blank" rel="noopener">Open case in Tools</a>
+                        ${(supportCase.public_url || '') ? `<a class="btn secondary" href="${escapeHtml(supportCase.public_url || '')}" target="_blank" rel="noopener">Open public case link</a>` : ''}
+                    </div>`
+                    : ''}
                 <form class="operator-form" data-manual-form>
                     <h4>Manual handling</h4>
                     <input type="hidden" name="mailbox_id" value="${escapeHtml(mailbox.id || 0)}">
@@ -445,7 +457,9 @@
                 </div>
                 ${mailbox.source === 'config_only'
                     ? '<div class="info-note">No saved run has touched this mailbox yet. The dashboard can show that the mailbox exists in Tools config, but it only becomes a readable inbox-style activity view after a dry-run or real polling pass records message results.</div>'
-                    : '<div class="info-note">This is the latest saved run for this mailbox. The standalone dashboard is intentionally a lightweight operator inbox, not a live IMAP mail client.</div>'}
+                    : mailbox.source === 'live_inbox'
+                        ? '<div class="info-note">This mailbox currently shows the live unread IMAP preview, so you can inspect and act on fresh unread mail even before another saved run exists.</div>'
+                        : '<div class="info-note">This is the latest saved run for this mailbox. The standalone dashboard is intentionally a lightweight operator inbox, not a full IMAP admin client.</div>'}
                 ${Array.isArray(mailbox.messages) && mailbox.messages.length
                     ? `<div class="message-list">${mailbox.messages.map((message) => renderMessageCard(message, mailbox)).join('')}</div>`
                     : '<div class="empty">No per-message activity recorded for this mailbox yet.</div>'}

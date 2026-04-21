@@ -25,6 +25,8 @@ It is expected to:
 - `cron-run.sh` - shell wrapper for cron
 - `public/index.php` - web entrypoint
 - `src/Tools/ToolsApiClient.php` - Tools config + AI HTTP client
+- `tests/tools-case-sync-regression.php` - verifies processed standalone message outcomes are synced back into the new Tools-side support case store
+- `tests/unanswered-report-regression.php` - verifies the optional unanswered-message summary report is emitted when enabled and pending messages exist
 - `src/Mail/ImapMailboxClient.php` - IMAP transport wrapper
 - `src/Mail/MimeDecoder.php` - subject/body decoding helpers
 - `src/Runner/MailAssistantRunner.php` - orchestration logic
@@ -72,6 +74,9 @@ It is expected to:
 - The standalone dashboard should now prefer a human-readable operator inbox over raw JSON dumps: mailbox/message cards, expandable diagnostics, optional local-header visibility from saved message copies, and lightweight continuity inspection. It is still **not** the place where the full mailbox/rule admin model should be duplicated; keep heavy admin/config in Tools.
 - That operator inbox can now also take care of latest-run mail directly: operators may assign a local rule context, send a manual reply through the same styled outbound pipeline as automatic replies, or mark a message handled/read so the unread poller stops retrying it.
 - The dashboard's activity tab should still list configured mailboxes even before any dry-run/real run has produced message cards, while clearly stating that this surface shows latest-run activity rather than a full live IMAP mail client.
+- The standalone dashboard may now also merge a lightweight live unread IMAP preview into that activity tab, so operators can act on fresh unread mail even before another saved run exists.
+- The standalone runtime can now sync processed inbox outcomes back into Tools as threaded support cases, and outgoing replies may append a public case-tracking link for the recipient when that Tools sync succeeds in time.
+- Optional operator reporting for unanswered messages is now env-controlled (`MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED` / `MAIL_ASSISTANT_UNANSWERED_REPORT_TO`) and should summarize skipped/error/no-reply items after a run without interrupting the run itself when the report mail fails.
 - CLI/dry-run runs must now refuse to start when another process already holds the same assistant instance's local run lock; overlapping cron invocations should skip cleanly instead of double-processing unread mail.
 - `cron-run.sh` should also block overlapping wrapper-level cron starts before PHP begins, using a PID-aware shell lock with stale-lock cleanup so operators can see which process currently owns the cron wrapper lock.
 - The dashboard's config tab should keep readable matched-rule rows, fallback-rule details, and unmatched AI/IF rows visible so operators do not have to reverse-engineer the raw JSON to understand what Tools actually sent to the standalone runner.
@@ -150,6 +155,7 @@ It is expected to:
   multipart plain-text + HTML reply body instead of downgrading to text only.
 - CLI/manual runs now mirror logger output to stdout by default, so `php run` / `cron-run.sh` should show live progress
   while still saving the persistent log file.
+- Tools case sync is now part of the shared operator contract: if the runner records a message outcome or manual reply/handled action, it should best-effort push that thread state back into Tools without breaking mailbox handling when Tools sync itself fails.
 - Run summaries should include per-message `message_results[]` diagnostics, not only aggregate counters.
 - No-match diagnostics should retain an `evaluated_no_match_rules[]` trace so operators can see which unmatched rows were actually tried and why each one rejected/failed.
 - The local message-state file is still not allowed to suppress unread reprocessing, but it may now be used as a continuity hint to recover the prior selected rule / prior matched unmatched-row for reply-chain follow-ups.
@@ -178,6 +184,8 @@ php -l src/Support/MessageStateStore.php
 php -l src/Runner/MailAssistantRunner.php
 php -l src/Web/WebApp.php
 php -l tests/manual-reply-regression.php
+php -l tests/tools-case-sync-regression.php
+php -l tests/unanswered-report-regression.php
 php -l tests/markdown-html-reply-regression.php
 php -l tests/cron-script-lock-regression.php
 php -l tests/quota-alert-regression.php

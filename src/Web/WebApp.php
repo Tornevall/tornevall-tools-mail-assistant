@@ -63,10 +63,28 @@ class WebApp
     private function buildDashboardPayload(): array
     {
         $config = [];
+        $supportCases = [];
+        $liveInboxPreview = [];
         $configError = null;
         if ($this->tools->hasToken()) {
             try {
                 $config = $this->tools->fetchConfig();
+                try {
+                    $casesPayload = $this->tools->fetchCases(['limit' => 60]);
+                    $supportCases = is_array($casesPayload['cases'] ?? null) ? (array) $casesPayload['cases'] : [];
+                } catch (Throwable $e) {
+                    $this->logger->warning('Could not fetch support cases from Tools for the standalone dashboard.', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
+
+                try {
+                    $liveInboxPreview = $this->buildLiveInboxPreview($config);
+                } catch (Throwable $e) {
+                    $this->logger->warning('Could not build live inbox preview for the standalone dashboard.', [
+                        'error' => $e->getMessage(),
+                    ]);
+                }
             } catch (Throwable $e) {
                 $configError = $e->getMessage();
             }
@@ -85,14 +103,16 @@ class WebApp
             'toolsAdminUrl' => (string) Env::get('MAIL_ASSISTANT_TOOLS_ADMIN_URL', ''),
             'config' => $config,
             'configError' => $configError,
+            'supportCases' => $supportCases,
+            'liveInboxPreview' => $liveInboxPreview,
             'lastRun' => $lastRun,
             'messageState' => $messageState,
             'logLines' => $logLines,
             'messageCopies' => $messageCopies,
             'ui' => [
                 'alerts' => $this->buildAlertSummary($config, $lastRun),
-                'overview' => $this->buildOverviewSummary($config, $configError, $lastRun, $messageState, $messageCopies),
-                'activity' => $this->buildLastRunMailboxCards($lastRun, $messageCopies, $config),
+                'overview' => $this->buildOverviewSummary($config, $configError, $lastRun, $messageState, $messageCopies, $liveInboxPreview, $supportCases),
+                'activity' => $this->buildLastRunMailboxCards($lastRun, $messageCopies, $config, $supportCases, $liveInboxPreview),
                 'history' => $this->buildHistoryMailboxCards($messageState),
                 'config' => $this->buildConfigSummary($config, $configError),
                 'logs' => $this->buildLogSummary($logLines),
@@ -103,14 +123,21 @@ class WebApp
         ];
     }
 
-    private function buildOverviewSummary(array $config, ?string $configError, array $lastRun, array $messageState, array $messageCopies): array
+    private function buildOverviewSummary(array $config, ?string $configError, array $lastRun, array $messageState, array $messageCopies, array $liveInboxPreview = [], array $supportCases = []): array
     {
         $mailboxes = array_values((array) ($config['mailboxes'] ?? []));
         $ruleCount = 0;
         $noMatchRuleCount = 0;
+        $liveUnread = 0;
         foreach ($mailboxes as $mailbox) {
             $ruleCount += count((array) ($mailbox['rules'] ?? []));
             $noMatchRuleCount += count((array) (($mailbox['defaults']['generic_no_match_rules'] ?? null) ?: []));
+        }
+        foreach ((array) $liveInboxPreview as $previewMailbox) {
+            if (!is_array($previewMailbox)) {
+                continue;
+            }
+            $liveUnread += count((array) ($previewMailbox['messages'] ?? []));
         }
 
         return [
@@ -143,6 +170,18 @@ class WebApp
                 'value' => (int) ($lastRun['messages_skipped'] ?? 0),
                 'note' => 'Unread messages left untouched or deferred.',
                 'tone' => ((int) ($lastRun['messages_skipped'] ?? 0)) > 0 ? 'warning' : 'muted',
+            ],
+            [
+                'label' => 'Live unread preview',
+                'value' => $liveUnread,
+                'note' => 'Current unread IMAP messages visible to the dashboard right now.',
+                'tone' => $liveUnread > 0 ? 'info' : 'muted',
+            ],
+            [
+                'label' => 'Tracked Tools cases',
+                'value' => count($supportCases),
+                'note' => 'Threaded conversations already stored back in Tools.',
+                'tone' => count($supportCases) > 0 ? 'primary' : 'muted',
             ],
             [
                 'label' => 'Local history records',
@@ -217,11 +256,13 @@ class WebApp
         return $alerts;
     }
 
-    private function buildLastRunMailboxCards(array $lastRun, array $messageCopies, array $config = []): array
+    private function buildLastRunMailboxCards(array $lastRun, array $messageCopies, array $config = [], array $supportCases = [], array $liveInboxPreview = []): array
     {
         $copyIndex = $this->indexMessageCopies($messageCopies);
+        $caseIndex = $this->indexSupportCases($supportCases);
         $cards = [];
         $configuredMailboxes = [];
+        $livePreviewByMailbox = [];
         foreach ((array) ($config['mailboxes'] ?? []) as $mailbox) {
             if (!is_array($mailbox)) {
                 continue;
@@ -229,12 +270,19 @@ class WebApp
 
             $configuredMailboxes[(int) ($mailbox['id'] ?? 0)] = $mailbox;
         }
+        foreach ((array) $liveInboxPreview as $previewMailbox) {
+            if (!is_array($previewMailbox)) {
+                continue;
+            }
+            $livePreviewByMailbox[(int) ($previewMailbox['mailbox_id'] ?? 0)] = $previewMailbox;
+        }
 
         foreach ((array) ($lastRun['mailboxes'] ?? []) as $mailbox) {
             if (!is_array($mailbox)) {
                 continue;
             }
 
+            $mailboxId = (int) ($mailbox['id'] ?? 0);
             $messages = [];
             foreach ((array) ($mailbox['message_results'] ?? []) as $message) {
                 if (!is_array($message)) {
@@ -267,12 +315,16 @@ class WebApp
                     'reply_transport' => (string) ($message['reply_transport'] ?? ''),
                     'rule_resolution_source' => (string) ($message['rule_resolution_source'] ?? ''),
                     'reused_from_message_id' => (string) ($message['reused_from_message_id'] ?? ''),
+                    'support_case' => $this->findSupportCaseForMessage($caseIndex, $mailboxId ?? 0, $message),
                     'copy' => $copy,
                 ];
             }
 
-            $mailboxId = (int) ($mailbox['id'] ?? 0);
             $configuredMailbox = $configuredMailboxes[$mailboxId] ?? [];
+            if (!count($messages) && isset($livePreviewByMailbox[$mailboxId])) {
+                $messages = $this->attachSupportCasesToMessages((array) ($livePreviewByMailbox[$mailboxId]['messages'] ?? []), $caseIndex, $mailboxId);
+            }
+
             $cards[] = [
                 'id' => $mailboxId,
                 'name' => (string) ($mailbox['name'] ?? (($configuredMailbox['name'] ?? null) ?: '')),
@@ -297,7 +349,7 @@ class WebApp
                 }, array_values(array_filter((array) ($configuredMailbox['rules'] ?? []), static function ($rule): bool {
                     return is_array($rule) && (int) ($rule['id'] ?? 0) > 0;
                 })))),
-                'source' => 'last_run',
+                'source' => count($messages) ? ((isset($livePreviewByMailbox[$mailboxId]) && !count((array) ($mailbox['message_results'] ?? []))) ? 'live_inbox' : 'last_run') : 'last_run',
                 'messages' => $messages,
                 'errors' => array_values((array) ($mailbox['errors'] ?? [])),
             ];
@@ -315,6 +367,8 @@ class WebApp
             if ($alreadyPresent) {
                 continue;
             }
+
+            $previewMessages = $this->attachSupportCasesToMessages((array) (($livePreviewByMailbox[(int) $mailboxId]['messages'] ?? null) ?: []), $caseIndex, (int) $mailboxId);
 
             $cards[] = [
                 'id' => (int) $mailboxId,
@@ -340,8 +394,8 @@ class WebApp
                 }, array_values(array_filter((array) ($configuredMailbox['rules'] ?? []), static function ($rule): bool {
                     return is_array($rule) && (int) ($rule['id'] ?? 0) > 0;
                 })))),
-                'source' => 'config_only',
-                'messages' => [],
+                'source' => count($previewMessages) ? 'live_inbox' : 'config_only',
+                'messages' => $previewMessages,
                 'errors' => [],
             ];
         }
@@ -612,6 +666,116 @@ class WebApp
         return $text;
     }
 
+    private function buildLiveInboxPreview(array $config): array
+    {
+        $previews = [];
+
+        foreach ((array) ($config['mailboxes'] ?? []) as $mailbox) {
+            if (!is_array($mailbox)) {
+                continue;
+            }
+
+            $mailboxId = (int) ($mailbox['id'] ?? 0);
+            if ($mailboxId < 1) {
+                continue;
+            }
+
+            try {
+                $messages = $this->runner->previewMailboxMessages($mailbox, 10);
+                $previews[] = [
+                    'mailbox_id' => $mailboxId,
+                    'mailbox_name' => (string) ($mailbox['name'] ?? ''),
+                    'messages' => $messages,
+                ];
+            } catch (Throwable $e) {
+                $previews[] = [
+                    'mailbox_id' => $mailboxId,
+                    'mailbox_name' => (string) ($mailbox['name'] ?? ''),
+                    'messages' => [],
+                    'error' => $e->getMessage(),
+                ];
+            }
+        }
+
+        return $previews;
+    }
+
+    private function indexSupportCases(array $supportCases): array
+    {
+        $index = [];
+
+        foreach ($supportCases as $case) {
+            if (!is_array($case)) {
+                continue;
+            }
+
+            $mailboxId = (int) ($case['mailbox_id'] ?? 0);
+            if ($mailboxId < 1) {
+                continue;
+            }
+
+            $index[$mailboxId][] = $case;
+        }
+
+        return $index;
+    }
+
+    private function attachSupportCasesToMessages(array $messages, array $caseIndex, int $mailboxId): array
+    {
+        $mapped = [];
+        foreach ($messages as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            $message['support_case'] = $this->findSupportCaseForMessage($caseIndex, $mailboxId, $message);
+            $mapped[] = $message;
+        }
+
+        return $mapped;
+    }
+
+    private function findSupportCaseForMessage(array $caseIndex, int $mailboxId, array $message): ?array
+    {
+        foreach ((array) ($caseIndex[$mailboxId] ?? []) as $case) {
+            if (!is_array($case)) {
+                continue;
+            }
+
+            $replyIssueId = strtoupper(trim((string) ($message['reply_issue_id'] ?? '')));
+            if ($replyIssueId !== '' && strcasecmp((string) ($case['reply_issue_id'] ?? ''), $replyIssueId) === 0) {
+                return $case;
+            }
+
+            $threadKey = trim((string) ($message['thread_key'] ?? ''));
+            if ($threadKey !== '' && strcasecmp((string) ($case['thread_key'] ?? ''), $threadKey) === 0) {
+                return $case;
+            }
+
+            foreach ((array) ($case['recent_messages'] ?? []) as $caseMessage) {
+                if (!is_array($caseMessage)) {
+                    continue;
+                }
+
+                if (
+                    !empty($message['message_id'])
+                    && strcasecmp((string) ($caseMessage['message_id'] ?? ''), (string) $message['message_id']) === 0
+                ) {
+                    return $case;
+                }
+
+                if (
+                    !empty($message['message_key'])
+                    && strcasecmp((string) ($caseMessage['message_key'] ?? ''), (string) $message['message_key']) === 0
+                ) {
+                    return $case;
+                }
+            }
+        }
+
+        return null;
+    }
+
     private function resolveActiveConfig(): array
     {
         if (!$this->tools->hasToken()) {
@@ -696,7 +860,10 @@ class WebApp
             }
         }
 
-        throw new \RuntimeException('The selected message is no longer present in the latest saved run summary. Refresh the dashboard and try again.');
+        $config = $this->resolveActiveConfig();
+        $mailbox = $this->findConfiguredMailbox($config, $mailboxId);
+
+        return $this->runner->loadOperatorMessageFromLiveInbox($mailbox, $uid, $messageId, $messageKey);
     }
 
     private function loadFullMessageCopy(?array $copy): array

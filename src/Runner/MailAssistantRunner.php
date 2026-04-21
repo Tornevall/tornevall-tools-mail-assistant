@@ -739,6 +739,7 @@ class MailAssistantRunner
             $summary['quota_alerts'] = array_values(array_filter($this->runtimeAlerts, static function (array $alert): bool {
                 return (string) ($alert['type'] ?? '') === 'ai_quota';
             }));
+            $summary['unanswered_report'] = $this->maybeDispatchUnansweredReport($summary);
 
             $this->logger->info('Mail assistant run completed.', [
                 'dry_run' => $dryRun,
@@ -752,6 +753,7 @@ class MailAssistantRunner
                 'messages_assistant_sent_skipped' => $summary['messages_assistant_sent_skipped'],
                 'messages_read_skipped' => $summary['messages_read_skipped'],
                 'spamassassin_copies_saved' => $summary['spamassassin_copies_saved'],
+                'unanswered_report_sent' => !empty($summary['unanswered_report']['sent']),
                 'errors' => count($summary['errors']),
                 'include_history' => $this->includeHistory,
             ]);
@@ -982,6 +984,54 @@ class MailAssistantRunner
     protected function createImapMailboxClient(array $config): ImapMailboxClient
     {
         return new ImapMailboxClient($config);
+    }
+
+    public function previewMailboxMessages(array $mailbox, int $limit = 10): array
+    {
+        $imap = $this->createImapMailboxClient((array) ($mailbox['imap'] ?? []));
+        $messages = $imap->fetchUnseenMessages(max(1, $limit));
+
+        return array_values(array_map(function (array $message): array {
+            return [
+                'uid' => (int) ($message['uid'] ?? 0),
+                'message_id' => (string) ($message['message_id'] ?? ''),
+                'message_key' => (string) ($message['message_key'] ?? ''),
+                'thread_key' => $this->resolveThreadKey($message),
+                'in_reply_to' => (string) ($message['in_reply_to'] ?? ''),
+                'references' => array_values((array) ($message['references'] ?? [])),
+                'subject' => (string) ($message['subject'] ?? ''),
+                'subject_normalized' => (string) (($message['subject_normalized'] ?? null) ?: ''),
+                'from' => (string) ($message['from'] ?? ''),
+                'to' => (string) ($message['to'] ?? ''),
+                'date' => (string) ($message['date'] ?? ''),
+                'outcome' => 'pending',
+                'reason' => 'live_inbox_unread',
+                'reason_label' => 'Unread live inbox preview',
+                'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
+                'selected_rule' => null,
+                'matching_rule_count' => 0,
+                'matching_rules' => [],
+                'generic_ai_decision' => [],
+                'reply_message_id' => '',
+                'reply_issue_id' => '',
+                'reply_transport' => '',
+                'rule_resolution_source' => 'live_inbox_preview',
+                'reused_from_message_id' => '',
+                'copy' => null,
+                'source' => 'live_inbox',
+            ];
+        }, array_values(array_filter($messages, 'is_array'))));
+    }
+
+    public function loadOperatorMessageFromLiveInbox(array $mailbox, int $uid, string $messageId, string $messageKey = ''): array
+    {
+        $imap = $this->createImapMailboxClient((array) ($mailbox['imap'] ?? []));
+        $message = $imap->findUnseenMessageByIdentity($uid, $messageId, $messageKey);
+        if (!is_array($message) || !count($message)) {
+            throw new RuntimeException('The selected message could not be found in the live unread IMAP inbox anymore. Refresh the dashboard and try again.');
+        }
+
+        return $message;
     }
 
     private function shouldMarkSeenOnSkip(array $mailbox, string $reason): bool
@@ -1979,6 +2029,14 @@ class MailAssistantRunner
             $record[(string) $key] = $value;
         }
 
+        $supportCase = $this->syncSupportCase([
+            'id' => (int) ($mailboxSummary['id'] ?? 0),
+            'name' => (string) ($mailboxSummary['name'] ?? ''),
+        ], $message, $status, $reason, $dryRun, $extra);
+        if ($supportCase) {
+            $record['support_case'] = $supportCase;
+        }
+
         if (!$dryRun) {
             $this->messageState->remember($mailboxId, $messageKey, $record);
         }
@@ -2098,8 +2156,76 @@ class MailAssistantRunner
             $record[(string) $key] = $value;
         }
 
+        $supportCase = $this->syncSupportCase($mailbox, $message, $status, $reason, $dryRun, $extra);
+        if ($supportCase) {
+            $record['support_case'] = $supportCase;
+        }
+
         if (!$dryRun) {
             $this->messageState->remember($mailboxId, $messageKey, $record);
+        }
+    }
+
+    private function syncSupportCase(array $mailbox, array $message, string $status, string $reason, bool $dryRun, array $extra = []): array
+    {
+        if ($dryRun || !$this->tools->hasToken()) {
+            return [];
+        }
+
+        $mailboxId = (int) ($mailbox['id'] ?? 0);
+        if ($mailboxId < 1) {
+            return [];
+        }
+
+        $selectedRule = is_array($extra['selected_rule'] ?? null) ? (array) $extra['selected_rule'] : [];
+        $payload = [
+            'mailbox_id' => $mailboxId,
+            'mailbox_name' => (string) ($mailbox['name'] ?? ''),
+            'message_key' => (string) ($message['message_key'] ?? ''),
+            'message_id' => (string) ($message['message_id'] ?? ''),
+            'reply_message_id' => (string) ($extra['reply_message_id'] ?? ''),
+            'reply_issue_id' => (string) ($extra['reply_issue_id'] ?? ''),
+            'thread_key' => $this->resolveThreadKey($message),
+            'in_reply_to' => (string) ($message['in_reply_to'] ?? ''),
+            'references' => array_values((array) ($message['references'] ?? [])),
+            'subject' => (string) ($message['subject'] ?? ''),
+            'subject_normalized' => (string) (($message['subject_normalized'] ?? null) ?: ''),
+            'reply_subject' => (string) ($extra['reply_subject'] ?? (($message['subject'] ?? null) ?: '')),
+            'from' => (string) ($message['from'] ?? ''),
+            'to' => (string) ($message['to'] ?? ''),
+            'date' => (string) ($message['date'] ?? ''),
+            'status' => $status,
+            'reason' => $reason,
+            'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
+            'reply_excerpt' => (string) ($extra['reply_excerpt'] ?? ''),
+            'selected_rule_id' => (int) (($selectedRule['id'] ?? null) ?: ($extra['selected_rule_id'] ?? 0)),
+            'selected_rule_name' => (string) (($selectedRule['name'] ?? null) ?: ($extra['selected_rule_name'] ?? '')),
+            'meta' => [
+                'reply_transport' => (string) ($extra['reply_transport'] ?? ''),
+                'post_handle_action' => (string) ($extra['post_handle_action'] ?? ''),
+                'post_handle_warning' => (string) ($extra['post_handle_warning'] ?? ''),
+                'matching_rule_count' => (int) ($extra['matching_rule_count'] ?? 0),
+                'matching_rules' => array_values((array) ($extra['matching_rules'] ?? [])),
+                'generic_ai_decision' => is_array($extra['generic_ai_decision'] ?? null) ? (array) $extra['generic_ai_decision'] : [],
+                'rule_resolution_source' => (string) ($extra['rule_resolution_source'] ?? ''),
+                'reused_from_message_id' => (string) ($extra['reused_from_message_id'] ?? ''),
+                'reused_from_reason' => (string) ($extra['reused_from_reason'] ?? ''),
+                'reply_sent' => !empty($extra['reply_sent']),
+                'error' => (string) ($extra['error'] ?? ''),
+            ],
+        ];
+
+        try {
+            return $this->tools->syncSupportCase($payload);
+        } catch (Throwable $e) {
+            $this->logger->warning('Could not sync support case state back into Tools.', [
+                'mailbox' => $mailbox['name'] ?? null,
+                'uid' => $message['uid'] ?? null,
+                'message_id' => $message['message_id'] ?? null,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
         }
     }
 
@@ -2334,6 +2460,185 @@ class MailAssistantRunner
         }
     }
 
+    private function maybeDispatchUnansweredReport(array $summary): array
+    {
+        if (!Env::bool('MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED', false)) {
+            return [
+                'enabled' => false,
+                'sent' => false,
+                'count' => 0,
+            ];
+        }
+
+        $report = $this->buildUnansweredReportSummary($summary);
+        if ((int) ($report['count'] ?? 0) < 1) {
+            return array_merge($report, [
+                'enabled' => true,
+                'sent' => false,
+                'reason' => 'no_unanswered_messages',
+            ]);
+        }
+
+        try {
+            $this->dispatchUnansweredReportMail($report);
+
+            return array_merge($report, [
+                'enabled' => true,
+                'sent' => true,
+            ]);
+        } catch (Throwable $e) {
+            $this->logger->warning('Unanswered support report mail could not be sent.', [
+                'count' => $report['count'] ?? 0,
+                'error' => $e->getMessage(),
+            ]);
+
+            return array_merge($report, [
+                'enabled' => true,
+                'sent' => false,
+                'reason' => 'report_send_failed',
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    private function buildUnansweredReportSummary(array $summary): array
+    {
+        $items = [];
+
+        foreach ((array) ($summary['mailboxes'] ?? []) as $mailbox) {
+            if (!is_array($mailbox)) {
+                continue;
+            }
+
+            foreach ((array) ($mailbox['message_results'] ?? []) as $message) {
+                if (!is_array($message)) {
+                    continue;
+                }
+
+                if (!$this->messageNeedsUnansweredReport($message)) {
+                    continue;
+                }
+
+                $items[] = [
+                    'mailbox_id' => (int) ($mailbox['id'] ?? 0),
+                    'mailbox_name' => (string) ($mailbox['name'] ?? ''),
+                    'uid' => (int) ($message['uid'] ?? 0),
+                    'message_id' => (string) ($message['message_id'] ?? ''),
+                    'reply_issue_id' => (string) ($message['reply_issue_id'] ?? ''),
+                    'subject' => (string) ($message['subject'] ?? ''),
+                    'from' => (string) ($message['from'] ?? ''),
+                    'date' => (string) ($message['date'] ?? ''),
+                    'outcome' => (string) ($message['outcome'] ?? ''),
+                    'reason' => (string) ($message['reason'] ?? ''),
+                    'reply_transport' => (string) ($message['reply_transport'] ?? ''),
+                    'body_excerpt' => (string) ($message['body_excerpt'] ?? ''),
+                    'support_case_admin_url' => (string) (($message['support_case']['admin_url'] ?? null) ?: ''),
+                    'support_case_public_url' => (string) (($message['support_case']['public_url'] ?? null) ?: ''),
+                ];
+            }
+        }
+
+        return [
+            'count' => count($items),
+            'items' => $items,
+            'generated_at' => date('c'),
+        ];
+    }
+
+    private function messageNeedsUnansweredReport(array $message): bool
+    {
+        if (!empty($message['reply_sent'])) {
+            return false;
+        }
+
+        $outcome = strtolower(trim((string) ($message['outcome'] ?? '')));
+        if (in_array($outcome, ['handled', 'warning'], true)) {
+            return false;
+        }
+
+        $reason = strtolower(trim((string) ($message['reason'] ?? '')));
+        if (in_array($reason, ['already_read_at_ingest', 'assistant_sent_marker'], true)) {
+            return false;
+        }
+
+        return true;
+    }
+
+    protected function dispatchUnansweredReportMail(array $report): void
+    {
+        $recipients = array_values(array_filter(array_map('trim', preg_split('/\s*[;,]\s*/', (string) Env::get('MAIL_ASSISTANT_UNANSWERED_REPORT_TO', '')) ?: [])));
+        if (!count($recipients)) {
+            throw new RuntimeException('MAIL_ASSISTANT_UNANSWERED_REPORT_TO is not configured.');
+        }
+
+        $fromName = trim((string) Env::get('MAIL_ASSISTANT_ALERT_FROM_NAME', 'Mail Support Assistant'));
+        $fromEmail = trim((string) Env::get('MAIL_ASSISTANT_ALERT_FROM_EMAIL', (string) Env::get('MAIL_ASSISTANT_SMTP_USERNAME', '')));
+        if ($fromEmail === '' || !filter_var($fromEmail, FILTER_VALIDATE_EMAIL)) {
+            $fromEmail = 'mail-assistant@localhost';
+        }
+
+        $subject = sprintf('[Mail Assistant] %d message(s) were not answered', (int) ($report['count'] ?? 0));
+        $bodyLines = [
+            'Mail Support Assistant finished a run with unanswered messages.',
+            '',
+            'Generated: ' . (string) ($report['generated_at'] ?? date('c')),
+            'Count: ' . (int) ($report['count'] ?? 0),
+            '',
+        ];
+
+        foreach ((array) ($report['items'] ?? []) as $item) {
+            $bodyLines[] = 'Mailbox: ' . (string) ($item['mailbox_name'] ?? '');
+            $bodyLines[] = 'From: ' . (string) ($item['from'] ?? '');
+            $bodyLines[] = 'Subject: ' . (string) ($item['subject'] ?? '');
+            $bodyLines[] = 'Reason: ' . (string) ($item['reason'] ?? '');
+            if (!empty($item['support_case_admin_url'])) {
+                $bodyLines[] = 'Tools case: ' . (string) $item['support_case_admin_url'];
+            }
+            $bodyLines[] = '';
+        }
+
+        $bodyText = trim(implode("\n", $bodyLines));
+        $bodyHtml = '<!DOCTYPE html><html lang="en"><body style="font-family:Arial,Helvetica,sans-serif;background:#f8fafc;color:#111827;padding:24px;">'
+            . '<div style="max-width:760px;margin:0 auto;background:#ffffff;border:1px solid #e5e7eb;border-radius:12px;padding:24px;">'
+            . '<h2 style="margin-top:0;color:#b45309;">Mail Support Assistant unanswered summary</h2>'
+            . '<pre style="white-space:pre-wrap;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;color:#111827;">'
+            . htmlspecialchars($bodyText, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8')
+            . '</pre></div></body></html>';
+
+        if ($this->tools->hasMailToken()) {
+            $this->tools->sendReplyViaTools([
+                'mailbox_id' => 0,
+                'rule_id' => 0,
+                'mode' => 'unanswered_report',
+                'to' => $recipients[0],
+                'cc' => [],
+                'bcc' => array_slice($recipients, 1),
+                'from' => $fromName . ' <' . $fromEmail . '>',
+                'subject' => $subject,
+                'body' => $bodyText,
+                'body_html' => $bodyHtml,
+                'message_meta' => [
+                    'report_type' => 'unanswered_messages',
+                    'count' => (int) ($report['count'] ?? 0),
+                ],
+            ]);
+        } else {
+            $headers = [
+                'From: ' . $fromName . ' <' . $fromEmail . '>',
+                'MIME-Version: 1.0',
+                'Content-Type: text/plain; charset=UTF-8',
+            ];
+            if (!@mail($recipients[0], $subject, $bodyText, implode("\r\n", $headers))) {
+                throw new RuntimeException('PHP mail() failed while sending unanswered report mail.');
+            }
+        }
+
+        $this->logger->warning('Unanswered support report mail sent to operator recipients.', [
+            'count' => $report['count'] ?? 0,
+            'recipients' => $recipients,
+        ]);
+    }
+
     private function shouldSendQuotaAlertMail(string $fingerprint, int $cooldownSeconds): bool
     {
         $path = $this->quotaAlertStateFile();
@@ -2450,7 +2755,7 @@ class MailAssistantRunner
 
     private function extractTrackedIssueTag(string $subject): string
     {
-        if (preg_match('/\[(?:[\p{L}]*rende|issue|ticket|case)\s+([^\[\]]+)\]/iu', $subject, $matches) !== 1) {
+        if (preg_match('/\[(?:[\p{L}]*rende|issue|ticket|case)\s+([^][]+)\]/iu', $subject, $matches) !== 1) {
             return '';
         }
 
@@ -2469,7 +2774,7 @@ class MailAssistantRunner
 
     private function extractIssueIdFromSubject(string $subject): string
     {
-        if (preg_match('/\[(?:[\p{L}]*rende|issue|ticket|case)\s+([^\[\]]+)\]/iu', $subject, $matches) !== 1) {
+        if (preg_match('/\[(?:[\p{L}]*rende|issue|ticket|case)\s+([^][]+)\]/iu', $subject, $matches) !== 1) {
             return '';
         }
 
@@ -2614,9 +2919,13 @@ class MailAssistantRunner
             throw new RuntimeException('Cannot send reply because no From email is configured.');
         }
 
-        $replyContent = $this->buildReplyContent($body, $message, $rule);
         $replyIssueId = $this->extractIssueIdFromSubject($subject);
         $replyMessageId = $this->buildOutgoingReplyMessageId($fromEmail, $message);
+        $caseLinkInfo = $this->ensureSupportCaseForOutgoingReply($mailbox, $rule, $message, $subject, $body, $replyIssueId, $replyMessageId, $dryRun);
+        $replyContent = $this->buildReplyContent($body, $message, $rule);
+        if ($caseLinkInfo) {
+            $replyContent = $this->appendSupportCaseLinkToReplyContent($replyContent, $caseLinkInfo);
+        }
         $headers = [
             'From: ' . $fromName . ' <' . $fromEmail . '>',
             self::ASSISTANT_SENT_HEADER . ': ' . self::ASSISTANT_SENT_HEADER_VALUE,
@@ -2655,10 +2964,12 @@ class MailAssistantRunner
                 'has_html' => !empty($replyContent['html']),
                 'reply_message_id' => $replyMessageId,
                 'reply_issue_id' => $replyIssueId,
+                'support_case_public_url' => $caseLinkInfo['public_url'] ?? '',
             ]);
             return [
                 'reply_message_id' => $replyMessageId,
                 'reply_issue_id' => $replyIssueId,
+                'reply_subject' => $subject,
                 'transport' => 'dry_run',
             ];
         }
@@ -2682,6 +2993,7 @@ class MailAssistantRunner
                 return [
                     'reply_message_id' => $replyMessageId,
                     'reply_issue_id' => $replyIssueId,
+                    'reply_subject' => $subject,
                     'transport' => $transport,
                 ];
             } catch (Throwable $transportError) {
@@ -2699,6 +3011,83 @@ class MailAssistantRunner
         throw new RuntimeException(
             'All configured mail transports failed. ' . implode(' | ', array_values(array_unique($attemptErrors)))
         );
+    }
+
+    private function ensureSupportCaseForOutgoingReply(array $mailbox, array $rule, array $message, string $subject, string $body, string $replyIssueId, string $replyMessageId, bool $dryRun): array
+    {
+        if ($dryRun || !$this->tools->hasToken()) {
+            return [];
+        }
+
+        $mailboxId = (int) ($mailbox['id'] ?? 0);
+        if ($mailboxId < 1) {
+            return [];
+        }
+
+        try {
+            return $this->tools->syncSupportCase([
+                'mailbox_id' => $mailboxId,
+                'mailbox_name' => (string) ($mailbox['name'] ?? ''),
+                'message_key' => (string) ($message['message_key'] ?? ''),
+                'message_id' => (string) ($message['message_id'] ?? ''),
+                'reply_message_id' => $replyMessageId,
+                'reply_issue_id' => $replyIssueId,
+                'thread_key' => $this->resolveThreadKey($message),
+                'in_reply_to' => (string) ($message['message_id'] ?? ''),
+                'references' => array_values((array) ($message['references'] ?? [])),
+                'subject' => (string) ($message['subject'] ?? ''),
+                'subject_normalized' => (string) (($message['subject_normalized'] ?? null) ?: ''),
+                'reply_subject' => $subject,
+                'from' => (string) ($message['from'] ?? ''),
+                'to' => (string) ($message['to'] ?? ''),
+                'date' => date('c'),
+                'status' => 'handled',
+                'reason' => 'reply_prepared_for_delivery',
+                'body_excerpt' => $this->buildStateMessageBodyExcerpt($message),
+                'reply_excerpt' => $this->buildStateExcerpt($body, 500),
+                'selected_rule' => $this->buildRuleSummaryFromRule($rule),
+                'selected_rule_id' => (int) ($rule['id'] ?? 0),
+                'selected_rule_name' => (string) ($rule['name'] ?? ''),
+                'meta' => [
+                    'reply_transport' => 'pending_delivery',
+                    'reply_sent' => true,
+                ],
+            ]);
+        } catch (Throwable $e) {
+            $this->logger->warning('Could not pre-create support case link for outgoing reply.', [
+                'mailbox' => $mailbox['name'] ?? null,
+                'uid' => $message['uid'] ?? null,
+                'message_id' => $message['message_id'] ?? null,
+                'reply_issue_id' => $replyIssueId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [];
+        }
+    }
+
+    private function appendSupportCaseLinkToReplyContent(array $replyContent, array $caseInfo): array
+    {
+        if (!Env::bool('MAIL_ASSISTANT_INCLUDE_CASE_LINK', true)) {
+            return $replyContent;
+        }
+
+        $publicUrl = trim((string) ($caseInfo['public_url'] ?? ''));
+        if ($publicUrl === '') {
+            return $replyContent;
+        }
+
+        $noticeText = "\n\nYou can follow this support case here:\n" . $publicUrl;
+        $replyContent['text'] = rtrim((string) ($replyContent['text'] ?? '')) . $noticeText;
+
+        $htmlNotice = '<p style="margin-top:18px;">You can follow this support case here:<br><a href="'
+            . htmlspecialchars($publicUrl, ENT_QUOTES, 'UTF-8')
+            . '">'
+            . htmlspecialchars($publicUrl, ENT_QUOTES, 'UTF-8')
+            . '</a></p>';
+        $replyContent['html'] = rtrim((string) ($replyContent['html'] ?? '')) . $htmlNotice;
+
+        return $replyContent;
     }
 
     private function buildOutgoingReplyMessageId(string $fromEmail, array $message): string

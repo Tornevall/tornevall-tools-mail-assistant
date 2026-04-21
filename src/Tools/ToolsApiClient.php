@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-     private const CLIENT_VERSION = '0.3.38';
+     private const CLIENT_VERSION = '0.3.39';
 
     private string $baseUrl;
     private string $token;
@@ -39,6 +39,35 @@ class ToolsApiClient
     public function fetchConfig(): array
     {
         return $this->request('GET', '/mail-support-assistant/config');
+    }
+
+    public function fetchCases(array $query = []): array
+    {
+        $path = '/mail-support-assistant/cases';
+        $params = [];
+        foreach (['limit', 'mailbox_id'] as $key) {
+            if (!array_key_exists($key, $query)) {
+                continue;
+            }
+
+            $value = trim((string) $query[$key]);
+            if ($value !== '') {
+                $params[$key] = $value;
+            }
+        }
+
+        if (count($params)) {
+            $path .= '?' . http_build_query($params);
+        }
+
+        return $this->request('GET', $path);
+    }
+
+    public function syncSupportCase(array $payload): array
+    {
+        $response = $this->request('POST', '/mail-support-assistant/cases/sync', $payload);
+
+        return is_array($response['case'] ?? null) ? (array) $response['case'] : $response;
     }
 
     public function sendReplyViaTools(array $payload): array

@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.3.39 - 2026-04-21
+
+- The standalone assistant can now sync processed unread-mail outcomes back into Tools as threaded support cases, so the same conversation can be reopened from Tools admin instead of living only inside one local `last-run.json` snapshot.
+- Outgoing replies can now append a public Tools case-tracking link for the recipient when a Tools case could be prepared before delivery.
+- The standalone dashboard now merges a live unread IMAP preview into the activity tab, so operators can see and act on fresh unread mail even before another saved run exists.
+- When enabled through `MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED`, the standalone runner can now send one operator report mail summarizing which messages were not answered during the run.
+- Added regression coverage in `tests/tools-case-sync-regression.php` and `tests/unanswered-report-regression.php`.
+
 ## 0.3.38 - 2026-04-21
 
 - CLI/dry-run executions now acquire a dedicated local run lock (`storage/state/run.lock`) before polling unread mail, so overlapping cron/dashboard runs are skipped cleanly instead of double-processing the same mailbox at the same time.

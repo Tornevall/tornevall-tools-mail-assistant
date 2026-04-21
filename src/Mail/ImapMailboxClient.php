@@ -59,6 +59,32 @@ class ImapMailboxClient
         return array_filter($messages);
     }
 
+    public function findUnseenMessageByIdentity(int $uid = 0, string $messageId = '', string $messageKey = '', int $limit = 60): ?array
+    {
+        $messageId = MimeDecoder::normalizeMessageId($messageId);
+        $messageKey = strtolower(trim($messageKey));
+
+        foreach ($this->fetchUnseenMessages($limit) as $message) {
+            if (!is_array($message)) {
+                continue;
+            }
+
+            if ($uid > 0 && (int) ($message['uid'] ?? 0) === $uid) {
+                return $message;
+            }
+
+            if ($messageId !== '' && strcasecmp((string) ($message['message_id'] ?? ''), $messageId) === 0) {
+                return $message;
+            }
+
+            if ($messageKey !== '' && strcasecmp((string) ($message['message_key'] ?? ''), $messageKey) === 0) {
+                return $message;
+            }
+        }
+
+        return null;
+    }
+
     public function moveMessage(int $uid, string $folder): bool
     {
         $stream = $this->requireStream();

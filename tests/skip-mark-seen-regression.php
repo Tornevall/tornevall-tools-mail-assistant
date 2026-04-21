@@ -13,16 +13,27 @@ use MailSupportAssistant\Tools\ToolsApiClient;
 final class FakeToolsApiClient extends ToolsApiClient
 {
     private array $config;
+    private bool $failOnGenericNoMatchEvaluation;
 
-    public function __construct(array $config)
+    public function __construct(array $config, bool $failOnGenericNoMatchEvaluation = false)
     {
         parent::__construct('https://example.invalid/api', 'test-token');
         $this->config = $config;
+        $this->failOnGenericNoMatchEvaluation = $failOnGenericNoMatchEvaluation;
     }
 
     public function fetchConfig(): array
     {
         return $this->config;
+    }
+
+    public function evaluateGenericNoMatchReply(array $mailbox, array $message, array $options = []): array
+    {
+        if ($this->failOnGenericNoMatchEvaluation) {
+            throw new RuntimeException('Generic no-match AI must not be evaluated when the mailbox checkbox is disabled.');
+        }
+
+        return parent::evaluateGenericNoMatchReply($mailbox, $message, $options);
     }
 }
 
@@ -98,7 +109,7 @@ function makeTempPath(string $prefix, string $suffix): string
     return $base . $suffix;
 }
 
-function runCase(array $mailboxDefaults, array $message): array
+function runCase(array $mailboxDefaults, array $message, bool $failOnGenericNoMatchEvaluation = false): array
 {
     $config = [
         'mailboxes' => [[
@@ -116,15 +127,30 @@ function runCase(array $mailboxDefaults, array $message): array
     $logger = new Logger(makeTempPath('mail-assistant-log', '.log'), makeTempPath('mail-assistant-last-run', '.json'));
     $messageState = new MessageStateStore(makeTempPath('mail-assistant-state', '.json'));
     $imap = new FakeImapMailboxClient([$message]);
-    $runner = new TestableMailAssistantRunner(new FakeToolsApiClient($config), $logger, $messageState, $imap);
+    $runner = new TestableMailAssistantRunner(new FakeToolsApiClient($config, $failOnGenericNoMatchEvaluation), $logger, $messageState, $imap);
 
     $summary = $runner->run(['include_history' => true]);
 
     return [$summary, $imap];
 }
 
+putenv('MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1');
+
 [$noMatchSummary, $noMatchImap] = runCase(
-    ['generic_no_match_ai_enabled' => false],
+    [
+        'generic_no_match_ai_enabled' => false,
+        'generic_no_match_if' => 'If the unmatched mail is a normal support request and clearly not spam, fraud, phishing, or sales, a fallback reply may be allowed.',
+        'generic_no_match_instruction' => 'Reply briefly and safely when allowed.',
+        'generic_no_match_rules' => [
+            [
+                'id' => 9001,
+                'sort_order' => 0,
+                'is_active' => true,
+                'if' => 'If this is a normal support request we may answer.',
+                'instruction' => 'Answer politely.',
+            ],
+        ],
+    ],
     [
         'uid' => 101,
         'is_seen' => false,
@@ -138,7 +164,8 @@ function runCase(array $mailboxDefaults, array $message): array
         'body_text' => 'No rule matches this message.',
         'body_text_reply_aware' => 'No rule matches this message.',
         'spam_assassin' => ['present' => false],
-    ]
+    ],
+    true
 );
 
 assertSameValue(1, $noMatchSummary['messages_skipped'] ?? null, 'No-match case should be counted as skipped.');
@@ -178,4 +205,6 @@ assertSameValue([202], $spamImap->markSeenCalls, 'Explicit heuristic skip should
 assertSameValue([], $spamImap->markUnseenCalls, 'Explicit heuristic skip should not force unread when operator wants it marked seen.');
 
 fwrite(STDOUT, "skip-mark-seen-regression: ok\n");
+
+putenv('MAIL_ASSISTANT_GENERIC_NO_MATCH_AI');
 

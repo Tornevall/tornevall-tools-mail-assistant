@@ -6,7 +6,7 @@ This project is intentionally small and can stay **databaseless**:
 
 - mailbox + rule configuration lives in Tools admin
 - the client fetches config from `GET /api/mail-support-assistant/config`
-- unmatched fallback now supports ordered add-row IF + instruction rules (`defaults.generic_no_match_rules[]`)
+- unmatched fallback now supports ordered add-row IF + instruction rules (`defaults.generic_no_match_rules[]`) plus one stricter mailbox-owned last fallback (`defaults.generic_no_match_if` / `generic_no_match_instruction`)
 - local state is limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`
 
 The project is **not** a Laravel app and must stay runnable as plain PHP.
@@ -78,9 +78,8 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
       - optional standalone reply fallback BCC: `MAIL_ASSISTANT_DEFAULT_BCC` (used only when neither the matched rule nor the mailbox config already supplies a BCC)
      - `MAIL_ASSISTANT_MTA_COMMAND` (used when transport is `custom_mta`)
      - `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API` (`true|false`)
-   - optional no-match fallback gate: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1` (kept off by default unless enabled in Tools config or env)
 3. In Tools admin, open `/admin/mail-support-assistant`
-4. Create mailbox/rule config there first (mailboxes, rules, unmatched fallback rows, sender defaults)
+4. Create mailbox/rule config there first (mailboxes, rules, strict unmatched fallback settings, advanced unmatched rows, sender defaults)
 5. Generate or rotate a personal `provider_mail_support_assistant` token there
 6. Paste that token into this project's `.env`
 7. If you plan to use Tools relay for outgoing mail, also generate/rotate `provider_mail_support_assistant_mailer` and set `MAIL_ASSISTANT_TOOLS_MAIL_TOKEN`
@@ -210,20 +209,21 @@ Rules can decide per message whether AI is enabled.
 ### Generic AI fallback when no rule matches
 
 - If a mailbox message has no matching rule, the runner can optionally try one generic AI reply path instead of always ignoring.
-- This fallback is gated by config and is disabled unless explicitly enabled through one of these flags:
-  - mailbox defaults: `generic_no_match_ai_enabled` (preferred)
-  - top-level/settings/features variants from Tools config (`generic_no_match_ai_enabled` / `generic_reply_on_no_match`)
-  - env fallback: `MAIL_ASSISTANT_GENERIC_NO_MATCH_AI=1`
-- Mailbox config for that fallback now supports ordered add-row rules under `generic_no_match_rules[]`.
+- This fallback is gated strictly by the mailbox checkbox in Tools config: `generic_no_match_ai_enabled`.
+- Environment flags no longer activate this fallback by themselves.
+- If that checkbox is off, the standalone runner now refuses to evaluate any unmatched AI row at all, even if older mailbox-level fallback text or advanced `generic_no_match_rules[]` rows are still populated in the fetched config.
+- Mailbox config for that fallback now supports ordered advanced rows under `generic_no_match_rules[]` plus one mailbox-owned last fallback in `generic_no_match_if` / `generic_no_match_instruction`.
 - Each active row can define:
   - `if`: describes which otherwise unmatched mail may be answered at all
   - `instruction`: describes how to write the reply if that IF condition clearly matches
   - optional `footer`, `ai_model`, and `ai_reasoning_effort`
+- The mailbox-owned `generic_no_match_if` / `generic_no_match_instruction` pair is treated as the very last unmatched fallback after those advanced rows.
 - The no-match AI path now asks Tools/OpenAI for a **strict JSON decision** instead of trusting any free-form reply text.
 - A generic fallback reply is sent only when the AI returns valid JSON with `can_reply=true`, `certainty="high"`, and a non-empty `reply` payload.
 - If there are no valid active unmatched rows (non-empty `if` + `instruction`), the fallback is treated as unconfigured and no unmatched-mail AI reply is sent.
 - Rows are evaluated in `sort_order` order and may fall through to later rows when an earlier row is rejected.
 - That same fall-through now also applies when one unmatched row hits a row-local AI/API evaluation error; the runner logs the failed row and still tries later active rows before giving up.
+- If a strict unmatched fallback reply is finally sent, the runner marks that handled message seen immediately so it is not picked up again by the unread-mail poller.
 - If a reply-chain follow-up is linked to an earlier handled unmatched conversation, the runner now prioritizes the previously used unmatched row first before checking the rest of the active rows, which helps repository/API follow-ups stay on the same support path.
 - For explicitly linked follow-ups in an already-approved unmatched thread, the runner can now skip the first allow-condition re-check entirely and go straight to generating the continuation reply on that same previously used unmatched row.
 - The AI is told to ignore outer SpamAssassin wrapper prose when it only forwards the original email, while still using SpamAssassin score/tests as safety hints.
@@ -248,6 +248,7 @@ Rules can decide per message whether AI is enabled.
 - Unmatched mail is now also logged more explicitly with mailbox/from/to/subject details, which makes `scanned` + `skipped` runs easier to diagnose.
 - No-match handling now records clearer state reasons such as `no_matching_rule_generic_ai_disabled`, `no_matching_rule_generic_ai_unconfigured`, `no_matching_rule_generic_ai_rejected`, `no_matching_rule_generic_ai_invalid_json`, `no_matching_rule_generic_ai_not_certain`, `no_matching_rule_generic_ai_empty_reply`, `no_matching_rule_generic_ai_error`, and `no_matching_rule_generic_ai_replied`.
 - No-match diagnostics now also include `generic_ai_decision.evaluated_no_match_rules[]`, so operators can see which unmatched fallback rows were actually tried, in order, before a reply was sent or the message was left unread.
+- Generic unmatched AI requests now also include their source (`advanced_row_rule` vs `mailbox_final_fallback`) in the AI request context, which makes upstream SocialGPT/OpenAI audit entries easier to map back to the exact unmatched fallback path.
 - Run summaries now separate `messages_read_skipped` from other skipped categories, so mail that is already marked read at ingest is tracked clearly and does not need to be interpreted as `no_matching_rule` noise.
 - Run summaries now also expose per-mailbox `message_results[]` entries so operators can see what happened to each scanned message during the current pass (`handled`, `skipped`, `warning`, `error`).
 - Those per-message diagnostics now also expose `thread_key`, `in_reply_to`, and `references[]`, which makes reply-chain troubleshooting much easier when a message unexpectedly falls through to no-match.

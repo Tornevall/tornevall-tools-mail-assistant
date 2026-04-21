@@ -328,13 +328,14 @@ class MailAssistantRunner
                                 }
                             }
                             if (!$selectedRuleMatch) {
-                            $genericNoMatch = $this->tryHandleGenericNoMatch($imap, $config, $mailbox, $message, $dryRun, is_array($threadReuse) ? $threadReuse : null);
+                            $genericNoMatch = $this->tryHandleGenericNoMatch($imap, $mailbox, $message, $dryRun, is_array($threadReuse) ? $threadReuse : null);
                             if (!empty($genericNoMatch['handled'])) {
                                     $genericReason = (string) ($genericNoMatch['reason'] ?? 'no_matching_rule_generic_ai_replied');
                                     $this->recordMessageState($mailboxSummary, $message, 'handled', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule_generic_ai_replied'), $dryRun, [
                                         'matching_rule_count' => 0,
                                         'matching_rules' => [],
                                         'selected_rule' => null,
+                                        'post_handle_action' => (string) ($genericNoMatch['post_handle_action'] ?? ''),
                                         'post_handle_warning' => (string) ($genericNoMatch['post_handle_warning'] ?? ''),
                                         'generic_ai_decision' => (array) ($genericNoMatch['ai_decision'] ?? []),
                                         'rule_resolution_source' => (string) ($genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match')),
@@ -345,10 +346,9 @@ class MailAssistantRunner
                                     'matching_rule_count' => 0,
                                     'matching_rules' => [],
                                     'selected_rule' => null,
+                                    'post_handle_action' => (string) ($genericNoMatch['post_handle_action'] ?? ''),
                                     'post_handle_warning' => (string) ($genericNoMatch['post_handle_warning'] ?? ''),
                                     'generic_ai_decision' => (array) ($genericNoMatch['ai_decision'] ?? []),
-                                    'reply_message_id' => (string) ($genericNoMatch['reply_message_id'] ?? ''),
-                                    'reply_transport' => (string) ($genericNoMatch['reply_transport'] ?? ''),
                                     'reply_message_id' => (string) ($genericNoMatch['reply_message_id'] ?? ''),
                                     'reply_transport' => (string) ($genericNoMatch['reply_transport'] ?? ''),
                                     'rule_resolution_source' => (string) ($genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match')),
@@ -829,9 +829,9 @@ class MailAssistantRunner
         return true;
     }
 
-    private function tryHandleGenericNoMatch(ImapMailboxClient $imap, array $config, array $mailbox, array $message, bool $dryRun, ?array $threadReuse = null): array
+    private function tryHandleGenericNoMatch(ImapMailboxClient $imap, array $mailbox, array $message, bool $dryRun, ?array $threadReuse = null): array
     {
-        if (!$this->isGenericNoMatchAiEnabled($config, $mailbox)) {
+        if (!$this->isGenericNoMatchAiEnabled($mailbox)) {
             return [
                 'handled' => false,
                 'reason' => 'no_matching_rule_generic_ai_disabled',
@@ -894,6 +894,8 @@ class MailAssistantRunner
                         'ai_model' => (string) ($noMatchRule['ai_model'] ?? (($defaults['generic_no_match_ai_model'] ?? null) ?: '')),
                         'ai_fallback_model' => (string) (($defaults['generic_no_match_ai_fallback_model'] ?? null) ?: ''),
                         'ai_reasoning_effort' => (string) ($noMatchRule['ai_reasoning_effort'] ?? (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: '')),
+                        'source' => (string) ($noMatchRule['source'] ?? 'advanced_row_rule'),
+                        'no_match_rule_id' => (int) ($noMatchRule['id'] ?? 0),
                     ]);
                     $replyText = trim((string) ($aiResult['reply'] ?? ($aiResult['response'] ?? '')));
                     $decision = [
@@ -1183,9 +1185,13 @@ class MailAssistantRunner
 
     private function buildGenericNoMatchRuleDecisionSummary(array $noMatchRule, array $decision): array
     {
+        $source = (string) (($noMatchRule['source'] ?? null) ?: 'advanced_row_rule');
+
         return [
             'id' => (int) ($noMatchRule['id'] ?? 0),
             'sort_order' => (int) ($noMatchRule['sort_order'] ?? 0),
+            'source' => $source,
+            'is_mailbox_final_fallback' => $source === 'mailbox_final_fallback',
             'if_condition' => (string) ($noMatchRule['if_condition'] ?? ''),
             'decision_reason_code' => (string) ($decision['decision_reason_code'] ?? ''),
             'can_reply' => !empty($decision['can_reply']),
@@ -1202,29 +1208,11 @@ class MailAssistantRunner
         return $decision;
     }
 
-    private function isGenericNoMatchAiEnabled(array $config, array $mailbox): bool
+    private function isGenericNoMatchAiEnabled(array $mailbox): bool
     {
         $defaults = (array) ($mailbox['defaults'] ?? []);
-        $candidates = [
-            $defaults['generic_no_match_ai_enabled'] ?? null,
-            $defaults['generic_reply_on_no_match'] ?? null,
-            $defaults['generic_ai_reply_on_no_match'] ?? null,
-            $mailbox['generic_no_match_ai_enabled'] ?? null,
-            $config['generic_no_match_ai_enabled'] ?? null,
-            $config['settings']['generic_no_match_ai_enabled'] ?? null,
-            $config['settings']['generic_reply_on_no_match'] ?? null,
-            $config['features']['generic_no_match_ai_enabled'] ?? null,
-            Env::get('MAIL_ASSISTANT_GENERIC_NO_MATCH_AI', '0'),
-        ];
 
-        foreach ($candidates as $value) {
-            $parsed = $this->toNullableBool($value);
-            if ($parsed !== null) {
-                return $parsed;
-            }
-        }
-
-        return false;
+        return $this->toNullableBool($defaults['generic_no_match_ai_enabled'] ?? null) === true;
     }
 
     private function toNullableBool($value): ?bool
@@ -1308,6 +1296,10 @@ class MailAssistantRunner
 
     private function resolveGenericNoMatchRules(array $mailbox): array
     {
+        if (!$this->isGenericNoMatchAiEnabled($mailbox)) {
+            return [];
+        }
+
         $defaults = (array) ($mailbox['defaults'] ?? []);
         $rows = [];
         foreach ((array) ($defaults['generic_no_match_rules'] ?? []) as $row) {
@@ -1334,6 +1326,7 @@ class MailAssistantRunner
                 'footer' => trim((string) (($row['footer'] ?? null) ?: '')),
                 'ai_model' => trim((string) (($row['ai_model'] ?? null) ?: '')),
                 'ai_reasoning_effort' => trim((string) (($row['ai_reasoning_effort'] ?? null) ?: '')),
+                'source' => 'advanced_row_rule',
             ];
         }
 
@@ -1346,25 +1339,28 @@ class MailAssistantRunner
             return ((int) $a['id']) <=> ((int) $b['id']);
         });
 
-        if ($rows) {
-            return $rows;
+        $finalFallbackIf = trim((string) (($defaults['generic_no_match_if'] ?? null) ?: ''));
+        $finalFallbackInstruction = trim((string) (($defaults['generic_no_match_instruction'] ?? null) ?: ''));
+        if ($finalFallbackIf !== '' && $finalFallbackInstruction !== '') {
+            $lastSortOrder = count($rows)
+                ? max(array_map(static function (array $row): int {
+                    return (int) ($row['sort_order'] ?? 0);
+                }, $rows))
+                : 0;
+
+            $rows[] = [
+                'id' => 900000000 + (int) ($mailbox['id'] ?? 0),
+                'sort_order' => $lastSortOrder + 1,
+                'if_condition' => $finalFallbackIf,
+                'instruction' => $finalFallbackInstruction,
+                'footer' => trim((string) (($defaults['generic_no_match_footer'] ?? null) ?: '')),
+                'ai_model' => trim((string) (($defaults['generic_no_match_ai_model'] ?? null) ?: '')),
+                'ai_reasoning_effort' => trim((string) (($defaults['generic_no_match_ai_reasoning_effort'] ?? null) ?: '')),
+                'source' => 'mailbox_final_fallback',
+            ];
         }
 
-        $legacyIf = trim((string) (($defaults['generic_no_match_if'] ?? null) ?: ''));
-        $legacyInstruction = trim((string) (($defaults['generic_no_match_instruction'] ?? null) ?: ''));
-        if ($legacyIf === '' || $legacyInstruction === '') {
-            return [];
-        }
-
-        return [[
-            'id' => 0,
-            'sort_order' => 0,
-            'if_condition' => $legacyIf,
-            'instruction' => $legacyInstruction,
-            'footer' => trim((string) (($defaults['generic_no_match_footer'] ?? null) ?: '')),
-            'ai_model' => '',
-            'ai_reasoning_effort' => '',
-        ]];
+        return $rows;
     }
 
     private function handleMessage(ImapMailboxClient $imap, array $mailbox, array $rule, array $message, bool $dryRun): array

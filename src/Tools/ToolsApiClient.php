@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-     private const CLIENT_VERSION = '0.3.32';
+     private const CLIENT_VERSION = '0.3.34';
 
     private string $baseUrl;
     private string $token;
@@ -138,6 +138,8 @@ class ToolsApiClient
         $reasoningEffort = $this->normalizeReasoningEffort(($options['ai_reasoning_effort'] ?? null) ?: Env::get('MAIL_ASSISTANT_AI_REASONING_EFFORT', 'medium'));
         $ifCondition = trim((string) ($options['if_condition'] ?? ''));
         $replyInstruction = trim((string) ($options['reply_instruction'] ?? ''));
+        $noMatchSource = trim((string) ($options['source'] ?? 'advanced_row_rule'));
+        $noMatchRuleId = (int) ($options['no_match_rule_id'] ?? 0);
 
         if ($ifCondition === '') {
             return [
@@ -181,6 +183,8 @@ class ToolsApiClient
 
         $contextLines = [
             'Mailbox: ' . (string) ($mailbox['name'] ?? ''),
+            'No-match source: ' . $noMatchSource,
+            'No-match rule id: ' . ($noMatchRuleId > 0 ? (string) $noMatchRuleId : 'n/a'),
             'From: ' . (string) ($message['from'] ?? ''),
             'To: ' . (string) ($message['to'] ?? ''),
             'Subject: ' . (string) ($message['subject'] ?? ''),

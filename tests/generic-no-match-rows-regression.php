@@ -72,9 +72,56 @@ final class GenericNoMatchRowsToolsApiClient extends ToolsApiClient
     }
 }
 
+final class RejectingSupportGenericNoMatchToolsApiClient extends ToolsApiClient
+{
+    private array $config;
+    public array $ruleEvaluations = [];
+
+    public function __construct(array $config)
+    {
+        parent::__construct('https://example.invalid/api', 'test-token');
+        $this->config = $config;
+    }
+
+    public function fetchConfig(): array
+    {
+        return $this->config;
+    }
+
+    public function evaluateGenericNoMatchReply(array $mailbox, array $message, array $options = []): array
+    {
+        $if = (string) ($options['if_condition'] ?? '');
+        $this->ruleEvaluations[] = $if;
+
+        if (stripos($if, 'sales pitch') !== false) {
+            return [
+                'can_reply' => false,
+                'certainty' => 'high',
+                'reason' => 'Sales row rejected this message.',
+                'decision_reason_code' => 'no_matching_rule_generic_ai_rejected',
+                'risk_flags' => ['unsolicited_sales'],
+                'raw_response' => '{}',
+                'reply' => '',
+            ];
+        }
+
+        return [
+            'can_reply' => false,
+            'certainty' => 'high',
+            'reason' => 'Support row rejected the message as unsafe to answer.',
+            'decision_reason_code' => 'no_matching_rule_generic_ai_rejected',
+            'risk_flags' => ['support_row_reject'],
+            'raw_response' => '{}',
+            'reply' => '',
+        ];
+    }
+}
+
 final class GenericNoMatchRowsImapMailboxClient extends ImapMailboxClient
 {
     public array $sent = [];
+    public array $markSeenCalls = [];
+    public array $markUnseenCalls = [];
 
     public function __construct(array $config = [])
     {
@@ -97,6 +144,15 @@ final class GenericNoMatchRowsImapMailboxClient extends ImapMailboxClient
 
     public function markSeen(int $uid): bool
     {
+        $this->markSeenCalls[] = $uid;
+
+        return true;
+    }
+
+    public function markUnseen(int $uid): bool
+    {
+        $this->markUnseenCalls[] = $uid;
+
         return true;
     }
 
@@ -113,9 +169,17 @@ final class GenericNoMatchRowsImapMailboxClient extends ImapMailboxClient
 
 final class GenericNoMatchRowsRunner extends MailAssistantRunner
 {
+    private GenericNoMatchRowsImapMailboxClient $imap;
+
+    public function __construct(ToolsApiClient $tools, Logger $logger, MessageStateStore $messageState, ?GenericNoMatchRowsImapMailboxClient $imap = null)
+    {
+        parent::__construct($tools, $logger, $messageState);
+        $this->imap = $imap ?: new GenericNoMatchRowsImapMailboxClient();
+    }
+
     protected function createImapMailboxClient(array $config): ImapMailboxClient
     {
-        return new GenericNoMatchRowsImapMailboxClient();
+        return $this->imap;
     }
 }
 
@@ -126,7 +190,7 @@ function assertTrueCondition(bool $condition, string $message): void
     }
 }
 
-function runGenericNoMatchRowsScenario(bool $throwOnSalesPitch): array
+function runGenericNoMatchRowsScenario(bool $throwOnSalesPitch, bool $rejectSupportRow = false, bool $dryRun = true): array
 {
     $tmp = sys_get_temp_dir() . '/mail-assistant-generic-rows-' . uniqid('', true);
     @mkdir($tmp, 0777, true);
@@ -165,11 +229,15 @@ function runGenericNoMatchRowsScenario(bool $throwOnSalesPitch): array
         ]],
     ];
 
-    $tools = new GenericNoMatchRowsToolsApiClient($config, $throwOnSalesPitch);
-    $runner = new GenericNoMatchRowsRunner($tools, $logger, $state);
-    $result = $runner->run(['dry_run' => true]);
+    $tools = $rejectSupportRow
+        ? new RejectingSupportGenericNoMatchToolsApiClient($config)
+        : new GenericNoMatchRowsToolsApiClient($config, $throwOnSalesPitch);
 
-    return [$tools, $result];
+    $imap = new GenericNoMatchRowsImapMailboxClient();
+    $runner = new GenericNoMatchRowsRunner($tools, $logger, $state, $imap);
+    $result = $runner->run(['dry_run' => $dryRun]);
+
+    return [$tools, $result, $imap];
 }
 
 [$tools, $result] = runGenericNoMatchRowsScenario(false);
@@ -187,6 +255,17 @@ assertTrueCondition(count($failingTools->ruleEvaluations) === 2, 'Expected later
 assertTrueCondition(count((array) ($failingResult['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'] ?? [])) === 2, 'Expected diagnostics to retain both evaluated rows after a row-local failure.');
 assertTrueCondition(((array) ($failingResult['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'] ?? []))[0]['decision_reason_code'] === 'no_matching_rule_generic_ai_error', 'Expected the first evaluated row to be recorded as a row-local generic AI error.');
 assertTrueCondition(((array) ($failingResult['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'] ?? []))[1]['can_reply'] === true, 'Expected the later unmatched row to remain eligible to reply after the first row failed.');
+
+[$rejectingTools, $rejectingResult, $rejectingImap] = runGenericNoMatchRowsScenario(false, true, false);
+
+assertTrueCondition(($rejectingResult['messages_skipped'] ?? 0) === 1, 'Expected one skipped message when all active unmatched rows reject.');
+assertTrueCondition(($rejectingResult['messages_handled'] ?? 0) === 0, 'Expected no handled messages when all active unmatched rows reject.');
+assertTrueCondition(count($rejectingTools->ruleEvaluations) === 2, 'Expected both unmatched rows to be evaluated before the runner gives up.');
+assertTrueCondition(($rejectingResult['mailboxes'][0]['message_results'][0]['reason'] ?? '') === 'no_matching_rule_generic_ai_rejected', 'Expected the run summary to keep the strict reject reason when all unmatched rows reject.');
+assertTrueCondition(count((array) ($rejectingResult['mailboxes'][0]['message_results'][0]['generic_ai_decision']['evaluated_no_match_rules'] ?? [])) === 2, 'Expected rejection diagnostics to record both evaluated unmatched rows.');
+assertTrueCondition(((array) ($rejectingResult['mailboxes'][0]['message_results'][0]['generic_ai_decision']['risk_flags'] ?? [])) === ['support_row_reject'], 'Expected the last rejecting row risk flags to remain visible in diagnostics.');
+assertTrueCondition($rejectingImap->markSeenCalls === [], 'Rejected unmatched rows must not mark the message seen.');
+assertTrueCondition($rejectingImap->markUnseenCalls === [901], 'Rejected unmatched rows must explicitly preserve unread state when IMAP supports it.');
 
 echo "generic-no-match-rows-regression: ok\n";
 

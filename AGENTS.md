@@ -2,7 +2,7 @@
 
 Project-local guide for `projects/tornevall-tools-mail-assistant`.
 
-Last synchronized: 2026-04-20
+Last synchronized: 2026-04-21
 
 ## Purpose
 
@@ -32,7 +32,8 @@ It is expected to:
 - `tests/dashboard-config-visibility-regression.php` - verifies the dashboard still shows config-only mailbox cards before any saved run exists and that readable matched-rule / unmatched-row AI fields stay exposed in the config summary
 - `src/Support/MessageStateStore.php` - optional local message-history storage under `storage/state/message-state.json` when history mode is requested
 - `tests/generic-no-match-json-regression.php` - strict JSON allow/deny parsing coverage for unmatched-mail AI
-- `tests/generic-no-match-runner-regression.php` - runner-level guard that rejected unmatched-mail AI decisions stay unread
+  - `tests/generic-no-match-final-fallback-regression.php` - verifies the mailbox-owned last unmatched fallback runs after advanced rows and marks handled messages seen after reply
+  - `tests/generic-no-match-rows-regression.php` - verifies ordered unmatched-row fallthrough, row-local failure tolerance, and the final all-rows-reject unread path
 - `tests/bcc-routing-regression.php` - verifies normalized `to` / `cc` / `bcc` relay recipient forwarding
 - `tests/default-bcc-env-regression.php` - verifies `.env` fallback BCC behavior when config BCC values are empty
 - `tests/reply-disabled-unread-regression.php` - verifies matched rules with `reply.enabled=false` stay unread by default
@@ -111,7 +112,12 @@ It is expected to:
 - If a rule matches but no outgoing reply is actually sent, the default-safe behavior is to leave the message unread and
   untouched unless the config explicitly opts into post-handle mutation without reply.
 - Mailbox-level `generic_no_match_*` AI settings are only for the unmatched-mail fallback path and must not replace matched rule AI overrides.
+- The unmatched-mail fallback must now be enabled only by the mailbox checkbox coming from Tools config (`generic_no_match_ai_enabled`); env-only toggles must not silently turn it on anymore.
+- If that checkbox is off, the standalone runner should not even materialize/evaluate advanced unmatched rows or the mailbox-level last fallback, even when those text fields still contain older saved values.
+- Ordered `generic_no_match_rules[]` rows are still the advanced unmatched checks, but the mailbox-owned `generic_no_match_if` / `generic_no_match_instruction` pair is now the strict last unmatched fallback after those rows.
+- If that strict last unmatched fallback actually sends a reply, the runner should finalize the message by marking it seen immediately so the next unread poll does not handle it again.
 - Unmatched fallback rows must continue in `sort_order` even if one row is rejected or hits a row-local AI/API evaluation failure; only a real sent reply should stop that unmatched-row loop early.
+- Generic unmatched AI request context should now expose which unmatched path triggered the request (`advanced_row_rule` vs `mailbox_final_fallback`) so upstream SocialGPT/OpenAI audit logs can be mapped back to the real standalone fallback source.
 - Outer SpamAssassin wrapper prose may be ignored for unmatched-mail AI classification, but SpamAssassin score/tests should still be available as safety/risk hints.
 - Outgoing replies now support `smtp` (default), `php_mail`, `custom_mta`, and `tools_api` transports (
   `MAIL_ASSISTANT_MAIL_TRANSPORT`).

@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## 0.3.34 - 2026-04-21
+
+- An unchecked mailbox `generic_no_match_ai_enabled` checkbox is now treated even more defensively: the standalone runner refuses to materialize any unmatched AI rows at all when that Tools checkbox is off, even if older `generic_no_match_if`, `generic_no_match_instruction`, or `generic_no_match_rules[]` values are still populated.
+- The Tools admin mailbox form now submits an explicit `0` value for that checkbox when it is unchecked, which makes disabling the unmatched AI fallback more reliable across normal and AJAX saves.
+- Generic unmatched AI requests now include their source (`advanced_row_rule` vs `mailbox_final_fallback`) and no-match rule id in the request context, so SocialGPT/OpenAI audit logs make it clearer which unmatched fallback path triggered the AI call.
+- `tests/skip-mark-seen-regression.php` now proves that populated unmatched fallback fields still stay inactive when the checkbox is off, `tests/generic-no-match-rows-regression.php` now also covers the final all-rows-reject unread path, and the older dedicated `tests/generic-no-match-runner-regression.php` regression is no longer needed.
+
+## 0.3.33 - 2026-04-21
+
+- The unmatched-mail AI fallback is now enabled only by the mailbox checkbox coming from Tools config; environment-only toggles no longer activate it by themselves.
+- Mailbox-level `generic_no_match_if` / `generic_no_match_instruction` now act as the strict **last unmatched fallback** after any ordered `generic_no_match_rules[]` rows have already been tried.
+- When that strict last fallback actually sends a reply, the standalone runner now finalizes the message by marking it seen immediately so it is not picked up again by unread polling.
+- Added regression coverage in `tests/generic-no-match-final-fallback-regression.php` and tightened `tests/skip-mark-seen-regression.php` so the old env toggle cannot silently re-enable the fallback.
+
 ## 0.3.32 - 2026-04-20
 
 - The standalone dashboard's **Refresh dashboard** button now calls the supported dashboard reload path again instead of failing with `Unknown ajax action.`.

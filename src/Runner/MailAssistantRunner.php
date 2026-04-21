@@ -6,6 +6,7 @@ use MailSupportAssistant\Mail\ImapMailboxClient;
 use MailSupportAssistant\Mail\MimeDecoder;
 use MailSupportAssistant\Support\Env;
 use MailSupportAssistant\Support\Logger;
+use MailSupportAssistant\Support\MarkdownRenderer;
 use MailSupportAssistant\Support\MessageStateStore;
 use MailSupportAssistant\Support\ProjectPaths;
 use MailSupportAssistant\Support\RunLock;
@@ -2763,23 +2764,9 @@ class MailAssistantRunner
     private function buildStyledHtmlReply(string $text, string $requestExcerpt = ''): string
     {
         $text = trim(str_replace(["\r\n", "\r"], "\n", $text));
-        $paragraphs = preg_split('/\n\s*\n/u', $text) ?: [];
-        $htmlBlocks = [];
-
-        foreach ($paragraphs as $paragraph) {
-            $paragraph = trim((string) $paragraph);
-            if ($paragraph === '') {
-                continue;
-            }
-
-            $escaped = htmlspecialchars($paragraph, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-            $htmlBlocks[] = '<p style="margin:0 0 16px 0;color:#111827 !important;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;">'
-                . nl2br($escaped, false)
-                . '</p>';
-        }
-
-        if (!count($htmlBlocks)) {
-            $htmlBlocks[] = '<p style="margin:0;color:#111827 !important;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;">'
+        $htmlBody = MarkdownRenderer::toHtml($text);
+        if ($htmlBody === '') {
+            $htmlBody = '<p style="margin:0;color:#111827 !important;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.6;">'
                 . nl2br(htmlspecialchars($text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), false)
                 . '</p>';
         }
@@ -2790,7 +2777,7 @@ class MailAssistantRunner
             . '<html lang="und"><head><meta charset="utf-8"><meta name="color-scheme" content="light only"><meta name="supported-color-schemes" content="light"></head>'
             . '<body style="margin:0;padding:24px;background-color:#f5f7fb;color:#111827 !important;">'
             . '<div style="max-width:720px;margin:0 auto;background:#ffffff;color:#111827 !important;border:1px solid #e5e7eb;border-radius:12px;padding:32px 28px;box-shadow:0 1px 2px rgba(15,23,42,0.08);">'
-            . implode('', $htmlBlocks)
+            . $htmlBody
             . $requestExcerptHtml
             . '</div></body></html>';
     }

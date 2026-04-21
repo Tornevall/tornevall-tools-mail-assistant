@@ -22,6 +22,7 @@ The project is **not** a Laravel app and must stay runnable as plain PHP.
 - `storage/` - logs, last-run summary, and persisted local state
 - `storage/state/message-state.json` - optional normalized local message history per mailbox for diagnostics when explicitly requested
 - `storage/state/run.lock` - non-blocking local lock file that prevents overlapping cron/dashboard runner executions
+- `storage/state/cron-run.lock.d/` - PID-aware shell lock directory used by `cron-run.sh` so overlapping cron wrappers can be rejected before PHP starts
 
 ## Requirements
 
@@ -86,6 +87,8 @@ Without `ext-imap`, the project still boots and the UI works, but real mailbox p
        - `MAIL_ASSISTANT_SUBJECT_ISSUE_LABEL` (default `Ärende`)
        - `MAIL_ASSISTANT_SUBJECT_ISSUE_PREFIX` (default `MSA`)
        - `MAIL_ASSISTANT_SUBJECT_ISSUE_LENGTH` (default `8`)
+      - optional cron-wrapper lock override:
+        - `MAIL_ASSISTANT_CRON_LOCK_DIR` (defaults to `storage/state/cron-run.lock.d`)
 3. In Tools admin, open `/admin/mail-support-assistant`
 4. Create mailbox/rule config there first (mailboxes, rules, strict unmatched fallback settings, advanced unmatched rows, sender defaults)
 5. Generate or rotate a personal `provider_mail_support_assistant` token there
@@ -171,6 +174,13 @@ cd /path/to/mail-support-assistant
 php run --limit=10 >> storage/logs/cron.log 2>&1
 ```
 
+If you prefer the shell wrapper, it now also keeps its own PID-aware lock so overlapping cron invocations are rejected before the PHP runner starts:
+
+```bash
+cd /path/to/mail-support-assistant
+bash cron-run.sh --limit=10 >> storage/logs/cron.log 2>&1
+```
+
 ## Support / changes / tickets
 
 Use GitHub tickets for bugs, feature requests, setup clarifications, and standalone runtime issues:
@@ -212,6 +222,7 @@ Rules can decide per message whether AI is enabled.
 - If an already-approved unmatched thread comes back through explicit reply headers, the standalone client can now continue that same unmatched row directly instead of re-running the first allow-condition triage from scratch for the same conversation.
 - The token owner still needs approved `provider_openai` access in Tools unless that user is admin.
 - Outgoing replies are now sent as `multipart/alternative`: a plain-text part is kept for compatibility, while the visible mail is also rendered as a small styled HTML card for more polished support replies.
+- That HTML reply body now also renders ordinary markdown from AI/operator reply text into real headings, lists, links, emphasis, and inline-code blocks instead of showing raw markdown markers inside the styled reply card.
 - Outgoing assistant replies are now stamped with `X-Tornevall-Mail-Assistant: sent` so follow-up polling can identify assistant-originated mail and avoid self-reply loops.
 - Outgoing replies now also append a compact excerpt of the original request, so the sent answer itself still shows what the user actually wrote even when the incoming mail was a malformed forwarded wrapper.
 - Exception: if the rule instruction explicitly says to **write only the email body**, the standalone runner now suppresses that appended request-summary block so the final sent body stays closer to the operator's exact instruction.
@@ -281,6 +292,7 @@ Rules can decide per message whether AI is enabled.
   - `custom_mta` (pipes RFC822 message to `MAIL_ASSISTANT_MTA_COMMAND`)
   - `tools_api` (relays via `POST /api/mail-support-assistant/send-reply`)
 - All of those reply transports now emit both plain text and styled HTML when a reply is sent, so mailbox clients that prefer HTML get a formatted message while older clients still see the plain-text fallback.
+- `cron-run.sh` now keeps a separate PID-aware shell lock with stale-lock cleanup, so cron overlap can be blocked even before `php run` starts. The default lock path is `storage/state/cron-run.lock.d`, but you can override it through `MAIL_ASSISTANT_CRON_LOCK_DIR` when several deployments share the same filesystem.
 - Generic unmatched fallback replies now apply the same trailing-signoff cleanup before row/mailbox footer override, which keeps one clean closing block there as well.
 - The generated HTML reply now uses stronger explicit text colors plus light-only color-scheme hints so manual replies/quoted history in mail clients are less likely to end up as white text on a white background.
 - If local transport fails and `MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API=true`, the runner automatically retries through the Tools relay endpoint.

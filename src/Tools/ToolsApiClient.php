@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-     private const CLIENT_VERSION = '0.3.36';
+     private const CLIENT_VERSION = '0.3.38';
 
     private string $baseUrl;
     private string $token;

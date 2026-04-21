@@ -29,7 +29,10 @@ It is expected to:
 - `src/Mail/MimeDecoder.php` - subject/body decoding helpers
 - `src/Runner/MailAssistantRunner.php` - orchestration logic
 - `src/Web/WebApp.php` - env-login dashboard
+- `src/Support/MarkdownRenderer.php` - safe markdown-to-HTML renderer used by outgoing styled reply bodies
 - `src/Support/RunLock.php` - non-blocking local lock file helper for overlap-safe cron/dashboard runs
+- `tests/cron-script-lock-regression.php` - verifies `cron-run.sh` blocks overlapping cron invocations through its PID-aware shell lock and recovers from stale lock holders
+- `tests/markdown-html-reply-regression.php` - verifies outgoing styled reply HTML converts markdown structure into real HTML instead of leaving raw markdown markers visible
 - `tests/run-lock-regression.php` - verifies a second runner invocation is rejected while another process already holds the run lock
 - `tests/subject-issue-id-regression.php` - verifies outgoing reply subjects reuse one stable issue-id tag instead of appending a new one on every reply
 - `tests/dashboard-config-visibility-regression.php` - verifies the dashboard still shows config-only mailbox cards before any saved run exists and that readable matched-rule / unmatched-row AI fields stay exposed in the config summary
@@ -70,6 +73,7 @@ It is expected to:
 - That operator inbox can now also take care of latest-run mail directly: operators may assign a local rule context, send a manual reply through the same styled outbound pipeline as automatic replies, or mark a message handled/read so the unread poller stops retrying it.
 - The dashboard's activity tab should still list configured mailboxes even before any dry-run/real run has produced message cards, while clearly stating that this surface shows latest-run activity rather than a full live IMAP mail client.
 - CLI/dry-run runs must now refuse to start when another process already holds the same assistant instance's local run lock; overlapping cron invocations should skip cleanly instead of double-processing unread mail.
+- `cron-run.sh` should also block overlapping wrapper-level cron starts before PHP begins, using a PID-aware shell lock with stale-lock cleanup so operators can see which process currently owns the cron wrapper lock.
 - The dashboard's config tab should keep readable matched-rule rows, fallback-rule details, and unmatched AI/IF rows visible so operators do not have to reverse-engineer the raw JSON to understand what Tools actually sent to the standalone runner.
 - Runtime alert banners should stay prominent for AI quota/billing failures and Tools-side daily AI budget exhaustion/low-budget states when that metadata is present in config or the latest run summary.
 - Mailbox credentials live in Tools admin and are fetched over the bearer-token config endpoint; local storage is
@@ -92,6 +96,7 @@ It is expected to:
 - When a reply chain is explicitly linked to a previously approved unmatched thread, the runner may now continue that same unmatched row directly instead of re-running the initial allow-condition classifier for the same conversation.
 - Outgoing replies are now composed as `multipart/alternative`: keep the plain-text reply body, but also derive a
   styled HTML body so ordinary mail clients see a formatted support reply instead of raw plain text.
+- That styled HTML body should now render normal markdown structure from AI/operator replies into real HTML blocks (headings, lists, links, emphasis, inline code) rather than exposing raw markdown markers in the visible mail body.
 - No-match skips should be logged explicitly with mailbox/from/to/subject metadata so operators can diagnose `scanned` +
   `skipped` runs without reverse-engineering IMAP content.
 - Rule collisions are now first-class diagnostics too: the runner should evaluate all matching rules, choose the winner
@@ -162,15 +167,19 @@ It is expected to:
 After edits, run at minimum:
 
 ```bash
+sh -n cron-run.sh
 php -l run
 php -l public/index.php
 php -l src/Tools/ToolsApiClient.php
 php -l src/Mail/ImapMailboxClient.php
 php -l src/Mail/MimeDecoder.php
+php -l src/Support/MarkdownRenderer.php
 php -l src/Support/MessageStateStore.php
 php -l src/Runner/MailAssistantRunner.php
 php -l src/Web/WebApp.php
 php -l tests/manual-reply-regression.php
+php -l tests/markdown-html-reply-regression.php
+php -l tests/cron-script-lock-regression.php
 php -l tests/quota-alert-regression.php
 php run --help
 php run --self-test

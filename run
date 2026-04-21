@@ -75,11 +75,13 @@ if ($options['help']) {
     echo "  MAIL_ASSISTANT_MAIL_FALLBACK_TOOLS_API / MAIL_ASSISTANT_MTA_COMMAND\n";
     echo "  MAIL_ASSISTANT_SUBJECT_ISSUE_ID_ENABLED / MAIL_ASSISTANT_SUBJECT_ISSUE_LABEL\n";
     echo "  MAIL_ASSISTANT_SUBJECT_ISSUE_PREFIX / MAIL_ASSISTANT_SUBJECT_ISSUE_LENGTH\n";
+    echo "  MAIL_ASSISTANT_CRON_LOCK_DIR (used by cron-run.sh PID lock)\n";
     echo "  MAIL_ASSISTANT_WEB_USER\n";
     echo "  MAIL_ASSISTANT_WEB_PASSWORD\n";
     echo "\nNotes:\n";
     echo "  History/message-state diagnostics are hidden by default and only included when --include-history is used.\n";
     echo "  Concurrent run/dry-run executions are skipped automatically while another process holds the run lock.\n";
+    echo "  cron-run.sh also keeps its own PID-aware shell lock so overlapping cron invocations can be rejected before PHP starts.\n";
     exit(0);
 }
 

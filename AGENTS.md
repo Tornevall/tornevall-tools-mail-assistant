@@ -2,7 +2,7 @@
 
 Project-local guide for `projects/tornevall-tools-mail-assistant`.
 
-Last synchronized: 2026-04-21
+Last synchronized: 2026-04-25
 
 ## Purpose
 
@@ -77,6 +77,7 @@ It is expected to:
 - The standalone dashboard may now also merge a lightweight live unread IMAP preview into that activity tab, so operators can act on fresh unread mail even before another saved run exists.
 - The standalone runtime can now sync processed inbox outcomes back into Tools as threaded support cases, and outgoing replies may append a public case-tracking link for the recipient when that Tools sync succeeds in time.
 - That centralized Tools case history can now also carry full inbound/outbound body content plus source-instance metadata, so shared operator review still works when the cronjob runs on a different server.
+- The same Tools case sync is now expected to push handled, ignored, manual-reply, and manual-marked mail even when the message lacks a stable local message-state key, and those synced case entries should carry raw inbound headers plus raw/plain/HTML body variants so Tools can behave more like a remote mail client.
 - Optional operator reporting for unanswered messages is now env-controlled (`MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED` / `MAIL_ASSISTANT_UNANSWERED_REPORT_TO`) and should summarize skipped/error/no-reply items after a run without interrupting the run itself when the report mail fails.
 - CLI/dry-run runs must now refuse to start when another process already holds the same assistant instance's local run lock; overlapping cron invocations should skip cleanly instead of double-processing unread mail.
 - `cron-run.sh` should also block overlapping wrapper-level cron starts before PHP begins, using a PID-aware shell lock with stale-lock cleanup so operators can see which process currently owns the cron wrapper lock.
@@ -159,6 +160,7 @@ It is expected to:
 - CLI/manual runs now mirror logger output to stdout by default, so `php run` / `cron-run.sh` should show live progress
   while still saving the persistent log file.
 - Tools case sync is now part of the shared operator contract: if the runner records a message outcome or manual reply/handled action, it should best-effort push that thread state back into Tools without breaking mailbox handling when Tools sync itself fails.
+- Remote case inspection should no longer stop at excerpts: when the standalone runner has raw headers, parsed header maps, raw plain text, normalized plain text, reply-aware text, or HTML body content, that data should be forwarded to Tools so the remote case page can expose the same message more faithfully.
 - Run summaries should include per-message `message_results[]` diagnostics, not only aggregate counters.
 - No-match diagnostics should retain an `evaluated_no_match_rules[]` trace so operators can see which unmatched rows were actually tried and why each one rejected/failed.
 - The local message-state file is still not allowed to suppress unread reprocessing, but it may now be used as a continuity hint to recover the prior selected rule / prior matched unmatched-row for reply-chain follow-ups.

@@ -6,3 +6,4 @@
 !/storage/cache/.gitignore
 /vendor/
 **.json
+storage/state/*.lock

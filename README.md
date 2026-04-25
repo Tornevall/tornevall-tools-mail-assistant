@@ -10,6 +10,8 @@ This project is intentionally small and can stay **databaseless**:
 - outgoing replies can now stamp one stable issue-id tag into the subject (default style: `[Ärende MSA-XXXXXXXX]`) and later replies in the same conversation reuse that same tag instead of appending a new one on every reply
 - the standalone client can now also sync processed inbox threads back into Tools as tracked support cases, with a public case link that can be appended to outgoing replies
 - synced Tools cases can now also carry centrally stored full inbound/outbound body content plus source-instance metadata, so Tools admin can show more than just excerpts even when the cronjob runs on another server
+- synced Tools cases now also keep raw inbound headers, parsed header maps, and raw/plain/HTML body variants, so Tools admin can inspect handled and unhandled mail more like a real remote mail client
+- standalone now attempts that Tools case sync even when the mail lacks a stable local message-state key, so handled/ignored mail is still pushed back into Tools instead of only being visible in the local runtime
 - the standalone runner now also refreshes one stable local message copy per scanned mail, which makes the dashboard/manual handling flows much less likely to lose the visible body content between runs
 - local state is still limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`; the actual threaded case archive can now live in Tools
 
@@ -167,7 +169,7 @@ Current UI features:
 - operator actions directly from latest-run message cards: assign a local rule context, send a manual reply, or mark the message handled/read for manual follow-up
 - message cards can now also expose linked Tools case URLs, and outgoing replies can append a public case-tracking link for the recipient when Tools case sync is available
 - processed inbox outcomes can now be synced back into Tools as threaded support cases, which also makes those cases visible from `/admin/mail-support-assistant` on the Tools host
-- those synced Tools cases can now also store the full inbound/outbound body text and the source runner/server identity, so Tools admin can be used as a more central operator history even when mail was processed elsewhere
+- those synced Tools cases can now also store raw inbound headers plus the full inbound/outbound body variants and the source runner/server identity, so Tools admin can be used as a more central operator history even when mail was processed elsewhere
 - standalone can now optionally send one summary mail after a run listing the messages that were not answered when `MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED=true`
 - human-readable Tools config summary (mailboxes, rule counts, matched rule rows, fallback-rule details, and unmatched AI/IF rows) with raw JSON still available under collapsible advanced sections
 - visible runtime alert cards for AI quota/billing failures plus Tools-side daily AI budget exhaustion/low-budget warnings when available in config

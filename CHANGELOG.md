@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.41 - 2026-04-25
+
+- Standalone case sync now also sends raw inbound headers, parsed header maps, and raw plain-text bodies to Tools so `/admin/mail-support-assistant/cases/{id}` can expose remote-readable headers plus richer inbound body variants instead of only excerpts.
+- Handled/ignored/manual outcomes now still attempt Tools case sync even when the local runner could not build a stable message-state key, which fixes cases where mail looked processed locally but never became visible in the remote Tools thread view.
+- Added focused unit coverage for literal-IP CIDR expansion plus stronger-rule precedence in the firewall live-control service, and extended Mail Support Assistant case-sync tests to keep the new header/raw-body fields covered.
+
 ## 0.3.40 - 2026-04-21
 
 - The standalone runner now refreshes one stable local message copy for every scanned mail, so the dashboard/manual handling flow keeps the actual body text visible instead of too easily falling back to empty/latest-run-only excerpts.

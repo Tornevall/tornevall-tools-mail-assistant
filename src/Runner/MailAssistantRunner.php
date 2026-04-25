@@ -2025,12 +2025,12 @@ class MailAssistantRunner
 
     private function recordMessageState(array &$mailboxSummary, array $message, string $status, string $reason, bool $dryRun, array $extra = []): void
     {
-        $messageKey = $this->resolveMessageKey($message);
-        if ($messageKey === '') {
-            return;
-        }
+        $supportCase = $this->syncSupportCase([
+            'id' => (int) ($mailboxSummary['id'] ?? 0),
+            'name' => (string) ($mailboxSummary['name'] ?? ''),
+        ], $message, $status, $reason, $dryRun, $extra);
 
-        $mailboxId = (int) ($mailboxSummary['id'] ?? 0);
+        $messageKey = $this->resolveMessageKey($message);
         $record = [
             'message_id' => (string) ($message['message_id'] ?? ''),
             'thread_key' => $this->resolveThreadKey($message),
@@ -2052,13 +2052,15 @@ class MailAssistantRunner
             $record[(string) $key] = $value;
         }
 
-        $supportCase = $this->syncSupportCase([
-            'id' => (int) ($mailboxSummary['id'] ?? 0),
-            'name' => (string) ($mailboxSummary['name'] ?? ''),
-        ], $message, $status, $reason, $dryRun, $extra);
         if ($supportCase) {
             $record['support_case'] = $supportCase;
         }
+
+        if ($messageKey === '') {
+            return;
+        }
+
+        $mailboxId = (int) ($mailboxSummary['id'] ?? 0);
 
         if (!$dryRun) {
             $this->messageState->remember($mailboxId, $messageKey, $record);
@@ -2165,10 +2167,11 @@ class MailAssistantRunner
     private function rememberManualMessageAction(array $mailbox, array $message, string $status, string $reason, bool $dryRun, array $extra = []): void
     {
         $mailboxId = (int) ($mailbox['id'] ?? 0);
-        $messageKey = $this->resolveMessageKey($message);
-        if ($mailboxId < 1 || $messageKey === '') {
+        if ($mailboxId < 1) {
             return;
         }
+
+        $supportCase = $this->syncSupportCase($mailbox, $message, $status, $reason, $dryRun, $extra);
 
         $record = [
             'message_id' => (string) ($message['message_id'] ?? ''),
@@ -2192,9 +2195,13 @@ class MailAssistantRunner
             $record[(string) $key] = $value;
         }
 
-        $supportCase = $this->syncSupportCase($mailbox, $message, $status, $reason, $dryRun, $extra);
         if ($supportCase) {
             $record['support_case'] = $supportCase;
+        }
+
+        $messageKey = $this->resolveMessageKey($message);
+        if ($messageKey === '') {
+            return;
         }
 
         if (!$dryRun) {
@@ -2217,7 +2224,7 @@ class MailAssistantRunner
         $payload = [
             'mailbox_id' => $mailboxId,
             'mailbox_name' => (string) ($mailbox['name'] ?? ''),
-            'message_key' => (string) ($message['message_key'] ?? ''),
+            'message_key' => (string) (($message['message_key'] ?? null) ?: $this->resolveMessageKey($message)),
             'message_id' => (string) ($message['message_id'] ?? ''),
             'reply_message_id' => (string) ($extra['reply_message_id'] ?? ''),
             'reply_issue_id' => (string) ($extra['reply_issue_id'] ?? ''),
@@ -2230,8 +2237,12 @@ class MailAssistantRunner
             'from' => (string) ($message['from'] ?? ''),
             'to' => (string) ($message['to'] ?? ''),
             'date' => (string) ($message['date'] ?? ''),
+            'direction' => 'inbound',
             'status' => $status,
             'reason' => $reason,
+            'headers_raw' => (string) (($message['headers_raw'] ?? null) ?: ''),
+            'headers_map' => is_array($message['headers_map'] ?? null) ? (array) $message['headers_map'] : [],
+            'body_text_raw' => (string) (($message['body_text_raw'] ?? null) ?: ''),
             'body_text' => (string) (($message['body_text'] ?? null) ?: ''),
             'body_text_reply_aware' => (string) (($message['body_text_reply_aware'] ?? null) ?: (($message['body_text'] ?? null) ?: '')),
             'body_html' => (string) (($message['body_html'] ?? null) ?: ''),

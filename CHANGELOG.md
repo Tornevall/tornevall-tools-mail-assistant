@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.42 - 2026-05-09
+
+- Every unread, non-assistant, not-already-seen mailbox message is now synced to Tools immediately when it is discovered, before the standalone runner decides whether the mail should be answered, skipped, or left for manual follow-up.
+- The later final reply/no-match outcome is still synced afterwards, so Tools can both show the raw discovered mail in its threaded case GUI and keep the final status updated for rule-building or manual AI follow-up.
+- `tests/tools-case-sync-regression.php` now proves the two-step sync contract: first `recorded/unread_message_discovered`, then the final unanswered outcome.
+
 ## 0.3.41 - 2026-04-25
 
 - Standalone case sync now also sends raw inbound headers, parsed header maps, and raw plain-text bodies to Tools so `/admin/mail-support-assistant/cases/{id}` can expose remote-readable headers plus richer inbound body variants instead of only excerpts.

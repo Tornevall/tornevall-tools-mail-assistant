@@ -148,9 +148,13 @@ $result = $runner->run();
 
 assertTrueValue(!empty($result['ok']), 'Runner should complete successfully.');
 assertSameValue(1, (int) ($result['messages_skipped'] ?? 0), 'Message should remain unanswered/skipped.');
-assertTrueValue(count($tools->syncCalls) >= 1, 'At least one Tools case sync call should be recorded.');
+assertSameValue(2, count($tools->syncCalls), 'Unread mail should be synced once on discovery and once again with the final unanswered outcome.');
 assertSameValue(77, (int) ($tools->syncCalls[0]['mailbox_id'] ?? 0), 'Case sync payload should contain the mailbox id.');
 assertSameValue('case-sync@example.test', (string) ($tools->syncCalls[0]['message_id'] ?? ''), 'Case sync payload should contain the inbound message id.');
+assertSameValue('recorded', (string) ($tools->syncCalls[0]['status'] ?? ''), 'The first sync should report that the unread mailbox message was discovered.');
+assertSameValue('unread_message_discovered', (string) ($tools->syncCalls[0]['reason'] ?? ''), 'The first sync should use the unread discovery reason code.');
+assertSameValue('ignored', (string) ($tools->syncCalls[1]['status'] ?? ''), 'The second sync should carry the final unanswered message status.');
+assertSameValue('no_matching_rule_generic_ai_disabled', (string) ($tools->syncCalls[1]['reason'] ?? ''), 'The second sync should keep the final unanswered reason code.');
 assertSameValue('The feed import has stopped working.', (string) ($tools->syncCalls[0]['body_text'] ?? ''), 'Case sync payload should now include the full plain-text inbound body.');
 assertSameValue('The feed import has stopped working.', (string) ($tools->syncCalls[0]['body_text_reply_aware'] ?? ''), 'Case sync payload should include the reply-aware inbound body too.');
 assertTrueValue(!empty(($tools->syncCalls[0]['meta']['source_instance'] ?? '')), 'Case sync payload should include centralized source-instance metadata.');

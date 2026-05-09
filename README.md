@@ -169,6 +169,7 @@ Current UI features:
 - operator actions directly from latest-run message cards: assign a local rule context, send a manual reply, or mark the message handled/read for manual follow-up
 - message cards can now also expose linked Tools case URLs, and outgoing replies can append a public case-tracking link for the recipient when Tools case sync is available
 - processed inbox outcomes can now be synced back into Tools as threaded support cases, which also makes those cases visible from `/admin/mail-support-assistant` on the Tools host
+- every unread, non-assistant, not-already-seen mailbox message is now also reported to Tools immediately when it is discovered, so the threaded Tools case view can still be used later for rule-building or manual AI follow-up even if no reply was sent during that run
 - those synced Tools cases can now also store raw inbound headers plus the full inbound/outbound body variants and the source runner/server identity, so Tools admin can be used as a more central operator history even when mail was processed elsewhere
 - standalone can now optionally send one summary mail after a run listing the messages that were not answered when `MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED=true`
 - human-readable Tools config summary (mailboxes, rule counts, matched rule rows, fallback-rule details, and unmatched AI/IF rows) with raw JSON still available under collapsible advanced sections

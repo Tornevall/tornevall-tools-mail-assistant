@@ -2,7 +2,7 @@
 
 Project-local guide for `projects/tornevall-tools-mail-assistant`.
 
-Last synchronized: 2026-04-25
+Last synchronized: 2026-05-09
 
 ## Purpose
 
@@ -76,6 +76,7 @@ It is expected to:
 - The dashboard's activity tab should still list configured mailboxes even before any dry-run/real run has produced message cards, while clearly stating that this surface shows latest-run activity rather than a full live IMAP mail client.
 - The standalone dashboard may now also merge a lightweight live unread IMAP preview into that activity tab, so operators can act on fresh unread mail even before another saved run exists.
 - The standalone runtime can now sync processed inbox outcomes back into Tools as threaded support cases, and outgoing replies may append a public case-tracking link for the recipient when that Tools sync succeeds in time.
+- Every unread, non-assistant, not-already-seen mailbox message should now be reported to Tools immediately when it is discovered, before later reply/no-match handling decides the final outcome, so admins can still build rules or trigger manual AI follow-up from the centralized Tools GUI afterwards.
 - That centralized Tools case history can now also carry full inbound/outbound body content plus source-instance metadata, so shared operator review still works when the cronjob runs on a different server.
 - The same Tools case sync is now expected to push handled, ignored, manual-reply, and manual-marked mail even when the message lacks a stable local message-state key, and those synced case entries should carry raw inbound headers plus raw/plain/HTML body variants so Tools can behave more like a remote mail client.
 - Optional operator reporting for unanswered messages is now env-controlled (`MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED` / `MAIL_ASSISTANT_UNANSWERED_REPORT_TO`) and should summarize skipped/error/no-reply items after a run without interrupting the run itself when the report mail fails.

@@ -386,6 +386,8 @@ class MailAssistantRunner
                         // Normalize subject: remove configured prefixes
                         $message['subject'] = $this->normalizeSubjectLine($message['subject'], $mailbox);
 
+                        $this->reportDiscoveredUnreadMessage($mailboxSummary, $message, $dryRun);
+
                         if (!empty($spamDecision['skip'])) {
                             $mailboxSummary['skipped']++;
                             $mailboxSummary['spamassassin_skipped']++;
@@ -2069,6 +2071,33 @@ class MailAssistantRunner
         if ($this->includeHistory) {
             $mailboxSummary['message_state_records'][] = array_merge(['message_key' => $messageKey], $record);
         }
+    }
+
+    private function reportDiscoveredUnreadMessage(array $mailboxSummary, array $message, bool $dryRun): void
+    {
+        $supportCase = $this->syncSupportCase([
+            'id' => (int) ($mailboxSummary['id'] ?? 0),
+            'name' => (string) ($mailboxSummary['name'] ?? ''),
+        ], $message, 'recorded', 'unread_message_discovered', $dryRun, [
+            'matching_rule_count' => 0,
+            'matching_rules' => [],
+            'selected_rule' => null,
+            'reply_sent' => false,
+            'rule_resolution_source' => 'mailbox_unread_discovery',
+            'post_handle_action' => '',
+            'post_handle_warning' => '',
+        ]);
+
+        if (!$supportCase) {
+            return;
+        }
+
+        $this->logger->info('Unread mailbox message was reported to Tools immediately on discovery.', [
+            'mailbox' => $mailboxSummary['name'] ?? null,
+            'uid' => $message['uid'] ?? null,
+            'message_id' => $message['message_id'] ?? null,
+            'support_case_id' => $supportCase['id'] ?? null,
+        ]);
     }
 
     private function preserveUnreadState(ImapMailboxClient $imap, array $message, bool $dryRun, string $reason): void

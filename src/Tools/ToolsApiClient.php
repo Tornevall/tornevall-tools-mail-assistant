@@ -992,7 +992,11 @@ class ToolsApiClient
         }
 
         if ($payload !== null) {
-            $encoded = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            $preparedPayload = $this->preparePayloadForTransport($path, $payload);
+            $encoded = json_encode($preparedPayload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+            if (!is_string($encoded)) {
+                throw new RuntimeException('Could not JSON-encode Tools request payload: ' . json_last_error_msg());
+            }
             $headers[] = 'Content-Type: application/json';
             curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
             curl_setopt($ch, CURLOPT_POSTFIELDS, $encoded);
@@ -1013,11 +1017,194 @@ class ToolsApiClient
         }
 
         if ($status >= 400 || (!empty($decoded['ok']) === false && (isset($decoded['message']) || isset($decoded['error'])))) {
-            $message = $this->stringifyApiValue($decoded['message'] ?? $decoded['error'] ?? ('HTTP ' . $status));
-            throw new RuntimeException($message);
+            throw new RuntimeException($this->buildApiErrorMessage($status, $decoded));
         }
 
         return $decoded;
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    protected function preparePayloadForTransport(string $path, array $payload): array
+    {
+        $normalized = $payload;
+
+        if (preg_match('#/mail-support-assistant/cases/sync$#', $path)) {
+            $normalized = $this->prepareSupportCaseSyncPayload($normalized);
+        }
+
+        return $this->normalizeJsonValue($normalized);
+    }
+
+    /**
+     * @param array<string,mixed> $payload
+     * @return array<string,mixed>
+     */
+    protected function prepareSupportCaseSyncPayload(array $payload): array
+    {
+        $stringLimits = [
+            'mailbox_name' => 255,
+            'message_key' => 255,
+            'message_id' => 255,
+            'reply_message_id' => 255,
+            'reply_issue_id' => 64,
+            'thread_key' => 255,
+            'in_reply_to' => 255,
+            'subject' => 998,
+            'subject_normalized' => 998,
+            'reply_subject' => 998,
+            'from' => 255,
+            'to' => 255,
+            'date' => 255,
+            'direction' => 32,
+            'status' => 32,
+            'reason' => 128,
+            'headers_raw' => 200000,
+            'body_text_raw' => 200000,
+            'body_text' => 200000,
+            'body_text_reply_aware' => 200000,
+            'body_html' => 240000,
+            'body_excerpt' => 20000,
+            'reply_body_text' => 200000,
+            'reply_body_html' => 240000,
+            'reply_excerpt' => 20000,
+            'selected_rule_name' => 255,
+        ];
+
+        foreach ($stringLimits as $field => $maxLength) {
+            if (!array_key_exists($field, $payload)) {
+                continue;
+            }
+
+            $payload[$field] = $this->truncateStringForTransport($payload[$field], $maxLength);
+        }
+
+        if (is_array($payload['references'] ?? null)) {
+            $payload['references'] = array_values(array_map(function ($value): string {
+                return $this->truncateStringForTransport($value, 255);
+            }, array_filter((array) $payload['references'], static function ($value): bool {
+                return trim((string) $value) !== '';
+            })));
+        }
+
+        if (is_array($payload['selected_rule'] ?? null)) {
+            $selectedRule = (array) $payload['selected_rule'];
+            if (array_key_exists('name', $selectedRule)) {
+                $selectedRule['name'] = $this->truncateStringForTransport($selectedRule['name'], 255);
+            }
+            $payload['selected_rule'] = $selectedRule;
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param array<string,mixed> $decoded
+     */
+    protected function buildApiErrorMessage(int $status, array $decoded): string
+    {
+        $parts = ['HTTP ' . $status];
+
+        $primary = $this->stringifyApiValue($decoded['message'] ?? $decoded['error'] ?? '');
+        if ($primary !== '' && $primary !== 'Unknown API error.') {
+            $parts[] = $primary;
+        }
+
+        if (is_array($decoded['errors'] ?? null)) {
+            foreach ((array) $decoded['errors'] as $field => $messages) {
+                $detail = $this->stringifyApiValue($messages);
+                if ($detail === '' || $detail === 'Unknown API error.') {
+                    continue;
+                }
+
+                $parts[] = trim((string) $field) !== ''
+                    ? ((string) $field) . ': ' . $detail
+                    : $detail;
+            }
+        }
+
+        return implode('; ', array_values(array_unique(array_filter($parts, static function ($value): bool {
+            return trim((string) $value) !== '';
+        }))));
+    }
+
+    /**
+     * @param mixed $value
+     * @return mixed
+     */
+    private function normalizeJsonValue($value)
+    {
+        if (is_array($value)) {
+            foreach ($value as $key => $entry) {
+                $value[$key] = $this->normalizeJsonValue($entry);
+            }
+
+            return $value;
+        }
+
+        if (is_string($value)) {
+            return $this->normalizeUtf8String($value);
+        }
+
+        return $value;
+    }
+
+    private function truncateStringForTransport($value, int $maxLength): string
+    {
+        $value = $this->normalizeUtf8String(trim((string) $value));
+        if ($value === '') {
+            return '';
+        }
+
+        if ($maxLength < 1) {
+            return '';
+        }
+
+        if (function_exists('mb_strlen') && function_exists('mb_substr')) {
+            if (mb_strlen($value, 'UTF-8') > $maxLength) {
+                return mb_substr($value, 0, $maxLength, 'UTF-8');
+            }
+
+            return $value;
+        }
+
+        if (strlen($value) > $maxLength) {
+            return substr($value, 0, $maxLength);
+        }
+
+        return $value;
+    }
+
+    private function normalizeUtf8String(string $value): string
+    {
+        if ($value === '' || preg_match('//u', $value)) {
+            return $value;
+        }
+
+        if (function_exists('mb_convert_encoding')) {
+            $converted = @mb_convert_encoding($value, 'UTF-8', 'UTF-8, Windows-1252, ISO-8859-1, ISO-8859-15');
+            if (is_string($converted) && $converted !== '' && preg_match('//u', $converted)) {
+                return $converted;
+            }
+        }
+
+        if (function_exists('iconv')) {
+            $converted = @iconv('UTF-8', 'UTF-8//IGNORE', $value);
+            if (is_string($converted) && $converted !== '' && preg_match('//u', $converted)) {
+                return $converted;
+            }
+
+            $converted = @iconv('Windows-1252', 'UTF-8//IGNORE', $value);
+            if (is_string($converted) && $converted !== '' && preg_match('//u', $converted)) {
+                return $converted;
+            }
+        }
+
+        $sanitized = preg_replace('/[^\x09\x0A\x0D\x20-\x7E]/', '?', $value);
+
+        return is_string($sanitized) ? $sanitized : '';
     }
 
     private function stringifyApiValue($value): string

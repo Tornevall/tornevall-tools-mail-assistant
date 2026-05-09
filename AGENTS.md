@@ -26,6 +26,7 @@ It is expected to:
 - `public/index.php` - web entrypoint
 - `src/Tools/ToolsApiClient.php` - Tools config + AI HTTP client
 - `tests/tools-case-sync-regression.php` - verifies processed standalone message outcomes are synced back into the new Tools-side support case store
+- `tests/tools-case-sync-request-regression.php` - verifies Tools case-sync payloads are UTF-8-safe, trimmed to the live API validation limits, and that field-level 422 validation details survive into the standalone warning text
 - `tests/unanswered-report-regression.php` - verifies the optional unanswered-message summary report is emitted when enabled and pending messages exist
 - `src/Mail/ImapMailboxClient.php` - IMAP transport wrapper
 - `src/Mail/MimeDecoder.php` - subject/body decoding helpers
@@ -79,6 +80,7 @@ It is expected to:
 - Every unread, non-assistant, not-already-seen mailbox message should now be reported to Tools immediately when it is discovered, before later reply/no-match handling decides the final outcome, so admins can still build rules or trigger manual AI follow-up from the centralized Tools GUI afterwards.
 - That centralized Tools case history can now also carry full inbound/outbound body content plus source-instance metadata, so shared operator review still works when the cronjob runs on a different server.
 - The same Tools case sync is now expected to push handled, ignored, manual-reply, and manual-marked mail even when the message lacks a stable local message-state key, and those synced case entries should carry raw inbound headers plus raw/plain/HTML body variants so Tools can behave more like a remote mail client.
+- The standalone Tools case-sync transport should now also sanitize broken/non-UTF8 mailbox strings, trim oversized sync fields down to the public API limits before sending them, and log field-level validation details from Tools when one sync still fails.
 - Optional operator reporting for unanswered messages is now env-controlled (`MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED` / `MAIL_ASSISTANT_UNANSWERED_REPORT_TO`) and should summarize skipped/error/no-reply items after a run without interrupting the run itself when the report mail fails.
 - CLI/dry-run runs must now refuse to start when another process already holds the same assistant instance's local run lock; overlapping cron invocations should skip cleanly instead of double-processing unread mail.
 - `cron-run.sh` should also block overlapping wrapper-level cron starts before PHP begins, using a PID-aware shell lock with stale-lock cleanup so operators can see which process currently owns the cron wrapper lock.

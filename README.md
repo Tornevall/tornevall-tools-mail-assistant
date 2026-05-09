@@ -12,6 +12,7 @@ This project is intentionally small and can stay **databaseless**:
 - synced Tools cases can now also carry centrally stored full inbound/outbound body content plus source-instance metadata, so Tools admin can show more than just excerpts even when the cronjob runs on another server
 - synced Tools cases now also keep raw inbound headers, parsed header maps, and raw/plain/HTML body variants, so Tools admin can inspect handled and unhandled mail more like a real remote mail client
 - standalone now attempts that Tools case sync even when the mail lacks a stable local message-state key, so handled/ignored mail is still pushed back into Tools instead of only being visible in the local runtime
+- the standalone client now also normalizes case-sync payload text/lengths before they are sent, so malformed mailbox encodings or unexpectedly large fields are much less likely to make one unread message vanish behind a generic Tools-side validation failure
 - the standalone runner now also refreshes one stable local message copy per scanned mail, which makes the dashboard/manual handling flows much less likely to lose the visible body content between runs
 - local state is still limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`; the actual threaded case archive can now live in Tools
 

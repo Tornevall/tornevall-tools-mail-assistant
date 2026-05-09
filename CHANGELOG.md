@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.3.43 - 2026-05-09
+
+- Tools case-sync payloads are now normalized more defensively before they are sent: overlong case fields are trimmed to the live API contract limits and broken/non-UTF8 text is sanitized so unread mailbox messages are much less likely to disappear behind a generic `422` when the standalone runner reports them back into Tools.
+- When Tools still rejects one sync request, the standalone runner now includes the field-level validation details from the API response in its warning text instead of only logging a generic `The given data was invalid.` message.
+- Added `tests/tools-case-sync-request-regression.php` to keep the new case-sync payload normalization and detailed API error formatting covered.
+
 ## 0.3.42 - 2026-05-09
 
 - Every unread, non-assistant, not-already-seen mailbox message is now synced to Tools immediately when it is discovered, before the standalone runner decides whether the mail should be answered, skipped, or left for manual follow-up.

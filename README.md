@@ -9,6 +9,7 @@ This project is intentionally small and can stay **databaseless**:
 - unmatched fallback now supports ordered add-row IF + instruction rules (`defaults.generic_no_match_rules[]`) plus one stricter mailbox-owned last fallback (`defaults.generic_no_match_if` / `generic_no_match_instruction`)
 - outgoing replies can now stamp one stable issue-id tag into the subject (default style: `[Ärende MSA-XXXXXXXX]`) and later replies in the same conversation reuse that same tag instead of appending a new one on every reply
 - the standalone client can now also sync processed inbox threads back into Tools as tracked support cases, with a public case link that can be appended to outgoing replies
+- those centralized Tools cases can now also be answered directly from the threaded Tools admin page, so follow-up replies no longer have to be finished only from the standalone dashboard/tool
 - synced Tools cases can now also carry centrally stored full inbound/outbound body content plus source-instance metadata, so Tools admin can show more than just excerpts even when the cronjob runs on another server
 - synced Tools cases now also keep raw inbound headers, parsed header maps, and raw/plain/HTML body variants, so Tools admin can inspect handled and unhandled mail more like a real remote mail client
 - standalone now attempts that Tools case sync even when the mail lacks a stable local message-state key, so handled/ignored mail is still pushed back into Tools instead of only being visible in the local runtime
@@ -172,6 +173,7 @@ Current UI features:
 - message cards can now also expose linked Tools case URLs, and outgoing replies can append a public case-tracking link for the recipient when Tools case sync is available
 - processed inbox outcomes can now be synced back into Tools as threaded support cases, which also makes those cases visible from `/admin/mail-support-assistant` on the Tools host
 - every unread, non-assistant, not-already-seen mailbox message is now also reported to Tools immediately when it is discovered, so the threaded Tools case view can still be used later for rule-building or manual AI follow-up even if no reply was sent during that run
+- once a skipped / unmatched / reply-not-sent mail has been handed over successfully into that Tools-side `needs_attention` flow, the standalone runner can now mark the IMAP message as seen so manual follow-up is centered in Tools instead of being retried as the same unread mail forever
 - those synced Tools cases can now also store raw inbound headers plus the full inbound/outbound body variants and the source runner/server identity, so Tools admin can be used as a more central operator history even when mail was processed elsewhere
 - standalone can now optionally send one summary mail after a run listing the messages that were not answered when `MAIL_ASSISTANT_UNANSWERED_REPORT_ENABLED=true`
 - human-readable Tools config summary (mailboxes, rule counts, matched rule rows, fallback-rule details, and unmatched AI/IF rows) with raw JSON still available under collapsible advanced sections

@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.45 - 2026-05-09
+
+- Follow-up cases that were handed over into Tools as centralized `needs_attention` threads can now be completed from the threaded Tools admin page instead of only from the standalone dashboard/tool, because Tools now has its own instruction field, AI-draft action, editable reply body, and direct send-through-Tools flow.
+- Once a skipped / unmatched / `reply not sent` mailbox message has been synced successfully into that centralized Tools follow-up flow, the standalone runner can now mark the IMAP message as seen so the same unread mail stops bouncing back into later standalone polls just because manual follow-up moved into Tools.
+
 ## 0.3.44 - 2026-05-09
 
 - Standalone case-sync payloads now suppress empty selected-rule placeholders (`selected_rule_id=0`, blank `selected_rule_name`, empty nested `selected_rule`) before the request is sent, which fixes the specific `HTTP 422; The given data was invalid.` failure that could otherwise block unmatched/unreplied mailbox messages from appearing in Tools.

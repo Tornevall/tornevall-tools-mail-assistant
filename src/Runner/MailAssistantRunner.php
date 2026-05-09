@@ -515,7 +515,19 @@ class MailAssistantRunner
 
                             $mailboxSummary['skipped']++;
                             $summary['messages_skipped']++;
-                                $genericSkipFinalize = $this->buildGenericNoMatchSkipFinalizeResult($imap, $message, $dryRun, $genericNoMatch);
+                                $supportCase = $this->syncSupportCase([
+                                    'id' => (int) ($mailboxSummary['id'] ?? 0),
+                                    'name' => (string) ($mailboxSummary['name'] ?? ''),
+                                ], $message, 'ignored', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule'), $dryRun, [
+                                    'matching_rule_count' => 0,
+                                    'matching_rules' => [],
+                                    'selected_rule' => null,
+                                    'generic_ai_decision' => (array) ($genericNoMatch['ai_decision'] ?? []),
+                                    'rule_resolution_source' => (string) ($genericNoMatch['rule_resolution_source'] ?? (($threadReuse['source'] ?? null) ?: 'generic_no_match')),
+                                    'reused_from_message_id' => (string) ($genericNoMatch['reused_from_message_id'] ?? (($threadReuse['record']['message_id'] ?? null) ?: '')),
+                                    'reused_from_reason' => (string) ($genericNoMatch['reused_from_reason'] ?? (($threadReuse['record']['reason'] ?? null) ?: '')),
+                                ]);
+                                $genericSkipFinalize = $this->buildGenericNoMatchSkipFinalizeResult($imap, $message, $dryRun, $genericNoMatch, is_array($supportCase) ? $supportCase : []);
                                 $this->recordMessageState($mailboxSummary, $message, 'ignored', (string) ($genericNoMatch['reason'] ?? 'no_matching_rule'), $dryRun, [
                                     'matching_rule_count' => 0,
                                     'matching_rules' => [],
@@ -572,6 +584,23 @@ class MailAssistantRunner
                                         'reason' => $genericNoMatch['reason'] ?? null,
                                     ]);
                                 }
+                            } elseif ($this->shouldMarkSeenAfterToolsFollowUp($supportCase) && !$dryRun) {
+                                $markSeenResult = $this->markMessageSeenForManualFollowUp($imap, $message, false);
+                                if (!empty($markSeenResult['post_handle_warning'])) {
+                                    $this->logger->warning('Message was handed over to Tools for manual follow-up, but IMAP could not mark it as seen.', [
+                                        'mailbox' => $mailbox['name'] ?? null,
+                                        'uid' => $message['uid'] ?? null,
+                                        'message_id' => $message['message_id'] ?? null,
+                                        'warning' => $markSeenResult['post_handle_warning'] ?? null,
+                                    ]);
+                                } else {
+                                    $this->logger->info('Message was handed over to Tools for manual follow-up and marked seen in IMAP.', [
+                                        'mailbox' => $mailbox['name'] ?? null,
+                                        'uid' => $message['uid'] ?? null,
+                                        'message_id' => $message['message_id'] ?? null,
+                                        'support_case_id' => $supportCase['id'] ?? null,
+                                    ]);
+                                }
                             } elseif ($this->shouldMarkSeenOnSkip($mailbox, (string) ($genericNoMatch['reason'] ?? '')) && !$dryRun) {
                                 $imap->markSeen((int) $message['uid']);
                             } else {
@@ -608,7 +637,7 @@ class MailAssistantRunner
                                 $mailboxSummary['skipped']++;
                                 $summary['messages_skipped']++;
                                 $skipReason = (string) ($handleResult['reason'] ?? 'rule_matched_reply_not_sent');
-                                $this->recordMessageState($mailboxSummary, $message, 'ignored', $skipReason, $dryRun, [
+                                $supportCase = $this->recordMessageState($mailboxSummary, $message, 'ignored', $skipReason, $dryRun, [
                                     'matching_rule_count' => count($matchingRuleSummaries),
                                     'matching_rules' => $matchingRuleSummaries,
                                     'selected_rule' => $selectedRuleSummary,
@@ -643,7 +672,26 @@ class MailAssistantRunner
                                     'selected_rule' => $selectedRuleSummary,
                                     'reason' => $skipReason,
                                 ]);
-                                $this->preserveUnreadState($imap, $message, $dryRun, 'reply_not_sent_preserve_unread');
+                                if ($this->shouldMarkSeenAfterToolsFollowUp($supportCase) && !$dryRun) {
+                                    $markSeenResult = $this->markMessageSeenForManualFollowUp($imap, $message, false);
+                                    if (!empty($markSeenResult['post_handle_warning'])) {
+                                        $this->logger->warning('Rule-matched follow-up was handed over to Tools, but IMAP could not mark the message as seen.', [
+                                            'mailbox' => $mailbox['name'] ?? null,
+                                            'uid' => $message['uid'] ?? null,
+                                            'message_id' => $message['message_id'] ?? null,
+                                            'warning' => $markSeenResult['post_handle_warning'] ?? null,
+                                        ]);
+                                    } else {
+                                        $this->logger->info('Rule-matched follow-up was handed over to Tools and marked seen in IMAP.', [
+                                            'mailbox' => $mailbox['name'] ?? null,
+                                            'uid' => $message['uid'] ?? null,
+                                            'message_id' => $message['message_id'] ?? null,
+                                            'support_case_id' => $supportCase['id'] ?? null,
+                                        ]);
+                                    }
+                                } else {
+                                    $this->preserveUnreadState($imap, $message, $dryRun, 'reply_not_sent_preserve_unread');
+                                }
                                 continue;
                             }
 
@@ -2025,7 +2073,7 @@ class MailAssistantRunner
         return '';
     }
 
-    private function recordMessageState(array &$mailboxSummary, array $message, string $status, string $reason, bool $dryRun, array $extra = []): void
+    private function recordMessageState(array &$mailboxSummary, array $message, string $status, string $reason, bool $dryRun, array $extra = []): array
     {
         $supportCase = $this->syncSupportCase([
             'id' => (int) ($mailboxSummary['id'] ?? 0),
@@ -2059,7 +2107,7 @@ class MailAssistantRunner
         }
 
         if ($messageKey === '') {
-            return;
+            return $supportCase;
         }
 
         $mailboxId = (int) ($mailboxSummary['id'] ?? 0);
@@ -2071,6 +2119,8 @@ class MailAssistantRunner
         if ($this->includeHistory) {
             $mailboxSummary['message_state_records'][] = array_merge(['message_key' => $messageKey], $record);
         }
+
+        return $supportCase;
     }
 
     private function reportDiscoveredUnreadMessage(array $mailboxSummary, array $message, bool $dryRun): void
@@ -2338,11 +2388,18 @@ class MailAssistantRunner
         return $meta;
     }
 
-    private function buildGenericNoMatchSkipFinalizeResult(ImapMailboxClient $imap, array $message, bool $dryRun, array $genericNoMatch): array
+    private function buildGenericNoMatchSkipFinalizeResult(ImapMailboxClient $imap, array $message, bool $dryRun, array $genericNoMatch, array $supportCase = []): array
     {
         $reason = strtolower(trim((string) ($genericNoMatch['reason'] ?? '')));
         $aiDecision = is_array($genericNoMatch['ai_decision'] ?? null) ? $genericNoMatch['ai_decision'] : [];
         $evaluatedRules = array_values((array) ($aiDecision['evaluated_no_match_rules'] ?? []));
+
+        if ($this->shouldMarkSeenAfterToolsFollowUp($supportCase)) {
+            $result = $this->markMessageSeenForManualFollowUp($imap, $message, $dryRun);
+            $result['mark_seen_terminal_no_match'] = false;
+
+            return $result;
+        }
 
         if (!count($evaluatedRules)) {
             return [
@@ -2401,6 +2458,13 @@ class MailAssistantRunner
             'post_handle_action' => 'mark_seen',
             'post_handle_warning' => 'The message reached the terminal unmatched/manual-review path, but IMAP could not mark it as seen. It may still come back on the next unread poll.',
         ];
+    }
+
+    private function shouldMarkSeenAfterToolsFollowUp($supportCase): bool
+    {
+        return is_array($supportCase)
+            && (int) ($supportCase['id'] ?? 0) > 0
+            && strtolower(trim((string) ($supportCase['status'] ?? ''))) === 'needs_attention';
     }
 
     private function maybeHandleAiQuotaIssue(array $mailbox, array $message, string $phase, string $errorMessage, array $extra = []): void

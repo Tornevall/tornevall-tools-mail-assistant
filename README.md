@@ -13,6 +13,7 @@ This project is intentionally small and can stay **databaseless**:
 - synced Tools cases now also keep raw inbound headers, parsed header maps, and raw/plain/HTML body variants, so Tools admin can inspect handled and unhandled mail more like a real remote mail client
 - standalone now attempts that Tools case sync even when the mail lacks a stable local message-state key, so handled/ignored mail is still pushed back into Tools instead of only being visible in the local runtime
 - the standalone client now also normalizes case-sync payload text/lengths before they are sent, so malformed mailbox encodings or unexpectedly large fields are much less likely to make one unread message vanish behind a generic Tools-side validation failure
+- the same case-sync transport now also strips empty selected-rule placeholders such as `selected_rule_id=0`, so unmatched/no-rule mail can still become visible in Tools instead of being rejected by optional selected-rule validation
 - the standalone runner now also refreshes one stable local message copy per scanned mail, which makes the dashboard/manual handling flows much less likely to lose the visible body content between runs
 - local state is still limited to session data, logs, the last run summary, and an optional local message-history file in `storage/`; the actual threaded case archive can now live in Tools
 

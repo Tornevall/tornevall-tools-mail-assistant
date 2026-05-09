@@ -43,11 +43,13 @@ $invalidUtf8 = "Broken \xC3\x28 payload";
 $prepared = $client->prepare('/mail-support-assistant/cases/sync', [
     'mailbox_id' => 1,
     'message_id' => 'message@example.test',
+    'selected_rule_id' => 0,
+    'selected_rule_name' => '   ',
     'subject' => str_repeat('S', 1205),
     'headers_raw' => $invalidUtf8,
     'references' => [str_repeat('r', 280), '', 'ok-ref'],
     'selected_rule' => [
-        'id' => 12,
+        'id' => 0,
         'name' => str_repeat('Rule', 100),
     ],
     'meta' => [
@@ -62,6 +64,9 @@ assertTrueValue((bool) preg_match('//u', (string) ($prepared['headers_raw'] ?? '
 assertTrueValue((bool) preg_match('//u', (string) ($prepared['meta']['raw'] ?? '')), 'Nested meta strings should be normalized into valid UTF-8 too.');
 assertTrueValue(json_encode($prepared, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) !== false, 'Prepared case-sync payload should be JSON-encodable.');
 assertSameValue(255, strlen((string) (($prepared['selected_rule']['name'] ?? ''))), 'Nested selected_rule.name should be truncated to the same 255-char guardrail.');
+assertTrueValue(!array_key_exists('selected_rule_id', $prepared), 'selected_rule_id should be omitted entirely when no rule matched yet and the payload still contains 0.');
+assertTrueValue(!array_key_exists('selected_rule_name', $prepared), 'selected_rule_name should be omitted when it is effectively empty.');
+assertTrueValue(!array_key_exists('id', (array) ($prepared['selected_rule'] ?? [])), 'Nested selected_rule.id should also be omitted when it only contains a zero placeholder.');
 
 $errorMessage = $client->buildError(422, [
     'message' => 'The given data was invalid.',

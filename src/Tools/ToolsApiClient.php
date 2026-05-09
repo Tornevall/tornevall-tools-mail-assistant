@@ -8,7 +8,7 @@ use RuntimeException;
 
 class ToolsApiClient
 {
-     private const CLIENT_VERSION = '0.3.41';
+     private const CLIENT_VERSION = '0.3.44';
 
     private string $baseUrl;
     private string $token;
@@ -1081,6 +1081,19 @@ class ToolsApiClient
             $payload[$field] = $this->truncateStringForTransport($payload[$field], $maxLength);
         }
 
+        if (array_key_exists('selected_rule_id', $payload)) {
+            $selectedRuleId = (int) $payload['selected_rule_id'];
+            if ($selectedRuleId > 0) {
+                $payload['selected_rule_id'] = $selectedRuleId;
+            } else {
+                unset($payload['selected_rule_id']);
+            }
+        }
+
+        if (array_key_exists('selected_rule_name', $payload) && trim((string) $payload['selected_rule_name']) === '') {
+            unset($payload['selected_rule_name']);
+        }
+
         if (is_array($payload['references'] ?? null)) {
             $payload['references'] = array_values(array_map(function ($value): string {
                 return $this->truncateStringForTransport($value, 255);
@@ -1091,10 +1104,25 @@ class ToolsApiClient
 
         if (is_array($payload['selected_rule'] ?? null)) {
             $selectedRule = (array) $payload['selected_rule'];
+            if (array_key_exists('id', $selectedRule)) {
+                $selectedRuleId = (int) $selectedRule['id'];
+                if ($selectedRuleId > 0) {
+                    $selectedRule['id'] = $selectedRuleId;
+                } else {
+                    unset($selectedRule['id']);
+                }
+            }
             if (array_key_exists('name', $selectedRule)) {
                 $selectedRule['name'] = $this->truncateStringForTransport($selectedRule['name'], 255);
+                if ($selectedRule['name'] === '') {
+                    unset($selectedRule['name']);
+                }
             }
-            $payload['selected_rule'] = $selectedRule;
+            if (count($selectedRule)) {
+                $payload['selected_rule'] = $selectedRule;
+            } else {
+                unset($payload['selected_rule']);
+            }
         }
 
         return $payload;

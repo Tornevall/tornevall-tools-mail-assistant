@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.3.44 - 2026-05-09
+
+- Standalone case-sync payloads now suppress empty selected-rule placeholders (`selected_rule_id=0`, blank `selected_rule_name`, empty nested `selected_rule`) before the request is sent, which fixes the specific `HTTP 422; The given data was invalid.` failure that could otherwise block unmatched/unreplied mailbox messages from appearing in Tools.
+- Added server-side compatibility coverage for the same placeholder cleanup and extended `tests/tools-case-sync-request-regression.php` so the zero-id case stays covered.
+
 ## 0.3.43 - 2026-05-09
 
 - Tools case-sync payloads are now normalized more defensively before they are sent: overlong case fields are trimmed to the live API contract limits and broken/non-UTF8 text is sanitized so unread mailbox messages are much less likely to disappear behind a generic `422` when the standalone runner reports them back into Tools.

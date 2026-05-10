@@ -584,6 +584,22 @@ class MailAssistantRunner
                                         'reason' => $genericNoMatch['reason'] ?? null,
                                     ]);
                                 }
+                             } elseif ($this->shouldMarkSeenAfterToolsFollowUp($supportCase) && !$dryRun && (string) ($genericSkipFinalize['post_handle_action'] ?? '') !== '') {
+                                 if (!empty($genericSkipFinalize['post_handle_warning'])) {
+                                     $this->logger->warning('Message was handed over to Tools for manual follow-up, but IMAP could not mark it as seen.', [
+                                         'mailbox' => $mailbox['name'] ?? null,
+                                         'uid' => $message['uid'] ?? null,
+                                         'message_id' => $message['message_id'] ?? null,
+                                         'warning' => $genericSkipFinalize['post_handle_warning'] ?? null,
+                                     ]);
+                                 } else {
+                                     $this->logger->info('Message was handed over to Tools for manual follow-up and marked seen in IMAP.', [
+                                         'mailbox' => $mailbox['name'] ?? null,
+                                         'uid' => $message['uid'] ?? null,
+                                         'message_id' => $message['message_id'] ?? null,
+                                         'support_case_id' => $supportCase['id'] ?? null,
+                                     ]);
+                                 }
                             } elseif ($this->shouldMarkSeenAfterToolsFollowUp($supportCase) && !$dryRun) {
                                 $markSeenResult = $this->markMessageSeenForManualFollowUp($imap, $message, false);
                                 if (!empty($markSeenResult['post_handle_warning'])) {

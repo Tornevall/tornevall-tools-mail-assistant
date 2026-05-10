@@ -4,6 +4,7 @@
 
 - Follow-up cases that were handed over into Tools as centralized `needs_attention` threads can now be completed from the threaded Tools admin page instead of only from the standalone dashboard/tool, because Tools now has its own instruction field, AI-draft action, editable reply body, and direct send-through-Tools flow.
 - Once a skipped / unmatched / `reply not sent` mailbox message has been synced successfully into that centralized Tools follow-up flow, the standalone runner can now mark the IMAP message as seen so the same unread mail stops bouncing back into later standalone polls just because manual follow-up moved into Tools.
+- The same successful Tools handoff no longer triggers a duplicate second IMAP `markSeen()` call inside the standalone runner, so mailbox follow-up handoff now performs just one deliberate read-state update before the message leaves the local unread poll loop.
 
 ## 0.3.44 - 2026-05-09
 
